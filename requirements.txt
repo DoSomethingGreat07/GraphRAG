@@ -1,0 +1,12 @@
+streamlit
+networkx
+numpy
+sentence-transformers
+torch
+torch-geometric
+datasets
+langchain-core
+langchain-text-splitters
+openai
+python-dotenv
+tqdm
