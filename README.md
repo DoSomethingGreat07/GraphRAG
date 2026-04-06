@@ -13,7 +13,7 @@ Instead of treating retrieval as a flat top-k ranking problem, this system build
 - It shows a full GraphRAG workflow from data preparation to interactive QA.
 - It separates offline indexing from online inference, which makes the runtime app easier to understand.
 - It supports both evaluation on labeled dataset questions and open-ended custom questions.
-- It exposes multiple retrieval strategies so you can compare dense-only retrieval against graph-aware approaches.
+- It exposes multiple retrieval strategies so we can compare dense-only retrieval against graph-aware approaches.
 - It is practical to demo through Streamlit while still being structured enough to study as a research-style system.
 
 This repository is structured around two stages:
@@ -27,7 +27,7 @@ The goal of this README is to explain the system end to end in a way that is eas
 
 ## Quick Start
 
-If you want the fastest path from clone to a working demo:
+If we want the fastest path from clone to a working demo:
 
 ```bash
 python3 -m venv .venv
@@ -43,9 +43,9 @@ Then open the app and:
 1. start with `Dataset Question Mode`
 2. keep retrieval mode on `Dense`
 3. verify artifacts load correctly
-4. train the GNN later if you want `Fusion` and `PCST`
+4. train the GNN later if we want `Fusion` and `PCST`
 
-If you only want retrieval and do not need GPT-generated answers, you can still run the app without enabling answer generation in the UI.
+If we only want retrieval and do not need GPT-generated answers, we can still run the app without enabling answer generation in the UI.
 
 ## Demo Walkthrough
 
@@ -58,7 +58,7 @@ Once the app is running, a typical flow looks like this:
 5. Review retrieved titles and evidence chunks.
 6. Optionally enable GPT answer generation to synthesize a final answer from retrieved evidence.
 
-If you want to add screenshots later, this is a good place to include:
+If we want to add screenshots later, this is a good place to include:
 
 - the main app landing page
 - dataset question mode with gold-title comparison
@@ -105,7 +105,7 @@ There are two main usage paths in the app:
 - `Custom Question Mode`
   Uses any user-typed question. The system searches the indexed corpus, but there is no ground-truth label for that question, so only retrieved evidence can be shown.
 
-## Repository Layout
+## Repository Lawet
 
 ```text
 app.py                          Streamlit application
@@ -190,7 +190,7 @@ These artifacts let the app start quickly without rebuilding the full pipeline e
 
 ### 6. Optional GNN Training
 
-If you want to use `Fusion` and `PCST` retrieval modes fully, train the GNN checkpoint with:
+If we want to use `Fusion` and `PCST` retrieval modes fully, train the GNN checkpoint with:
 
 ```bash
 python3 graphrag_env/src/gnn_train.py
@@ -256,7 +256,7 @@ Flow:
 Important property:
 
 - custom questions do not have dataset ground truth
-- the app cannot know the gold supporting titles unless the question exactly maps to a labeled dataset item and you explicitly build that lookup behavior
+- the app cannot know the gold supporting titles unless the question exactly maps to a labeled dataset item and we explicitly build that lookup behavior
 - therefore custom mode shows retrieved evidence only
 
 ## Retrieval Modes Explained
@@ -372,7 +372,7 @@ The app supports multiple artifact profiles. A profile is defined by settings li
 - `chunk_size`
 - `chunk_overlap`
 
-When you change the selected artifact profile in the sidebar, the app loads the corresponding:
+When we change the selected artifact profile in the sidebar, the app loads the corresponding:
 
 - manifest
 - example lookup
@@ -427,10 +427,10 @@ cp .env.example .env
 Then set:
 
 ```env
-OPENAI_API_KEY=your_key_here
+OPENAI_API_KEY=wer_key_here
 ```
 
-If you do not enable GPT answer generation in the UI, the app can still be used in retrieval-only mode.
+If we do not enable GPT answer generation in the UI, the app can still be used in retrieval-only mode.
 
 ### 5. Build Artifacts
 
@@ -454,13 +454,13 @@ python3 prepare_artifacts.py \
 
 ### 6. Train the GNN Checkpoint
 
-If you want `Fusion` and `PCST`:
+If we want `Fusion` and `PCST`:
 
 ```bash
 python3 graphrag_env/src/gnn_train.py
 ```
 
-If you only need `Dense`, you can skip this step.
+If we only need `Dense`, we can skip this step.
 
 ### 7. Launch the App
 
@@ -472,7 +472,7 @@ streamlit run app.py
 
 ### Evaluate Known Dataset Questions
 
-Use this when you want to inspect whether the system retrieves the known gold supporting evidence.
+Use this when we want to inspect whether the system retrieves the known gold supporting evidence.
 
 Good for:
 
@@ -482,7 +482,7 @@ Good for:
 
 ### Ask Custom Questions
 
-Use this when you want to treat the system like a real QA application over the indexed corpus.
+Use this when we want to treat the system like a real QA application over the indexed corpus.
 
 Good for:
 
@@ -530,7 +530,7 @@ For a fresh deployment environment:
 4. optionally train or copy the GNN checkpoint
 5. run `streamlit run app.py`
 
-If you plan to deploy to a hosted environment, make sure that:
+If we plan to deploy to a hosted environment, make sure that:
 
 - the host has enough disk space for artifacts
 - model downloads are allowed
@@ -568,7 +568,7 @@ Fusion and PCST:
 
 ## Recommended First Run
 
-If you want the fastest path to seeing the app work:
+If we want the fastest path to seeing the app work:
 
 ```bash
 python3 -m venv .venv
@@ -584,7 +584,7 @@ Then:
 - start in `Dataset Question Mode`
 - use `Dense`
 - verify artifacts loaded correctly
-- train the GNN later if you want `Fusion` and `PCST`
+- train the GNN later if we want `Fusion` and `PCST`
 
 ## Troubleshooting
 
@@ -637,7 +637,7 @@ This project is best understood as a two-stage GraphRAG system:
 1. build a searchable graph-structured corpus offline
 2. run retrieval and answer generation online through a Streamlit app
 
-If you are evaluating retrieval quality, use dataset mode.
-If you are demoing open-ended QA over the indexed corpus, use custom mode.
+If we are evaluating retrieval quality, use dataset mode.
+If we are demoing open-ended QA over the indexed corpus, use custom mode.
 
 Both flows share the same indexed knowledge base, but they differ in one critical way: dataset questions have gold evidence labels, while custom questions do not.
