@@ -6,6 +6,8 @@ graphrag_env/.env
 .venv/
 venv/
 env/
+frontend/node_modules/
+frontend/dist/
 
 # Editor and OS files
 .DS_Store
@@ -16,6 +18,7 @@ env/
 __pycache__/
 *.py[cod]
 *.pyo
+backend/__pycache__/
 
 # Generated artifacts and model outputs
 artifacts/
@@ -24,3 +27,8 @@ graphrag_env/src/llm_eval_results*.json
 
 # Local notebooks and scratch files
 loading.txt
+project_status_update_apr7_neurips.aux
+project_status_update_apr7_neurips.log
+project_status_update_apr7_neurips.out
+project_status_update_apr7_neurips.pdf
+test_loading.ipynb

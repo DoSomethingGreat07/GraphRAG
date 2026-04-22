@@ -876,12 +876,12 @@ def render_custom_mode(resources, retrieval_mode, top_k, lambda_dense, llm_enabl
             placeholder="Example: Which magazine was started first Arthur's Magazine or First for Women?",
             height=100,
         )
-        run_custom_query = st.form_submit_button("Run question", use_container_width=True)
+        run_custom_query_clicked = st.form_submit_button("Run question", use_container_width=True)
 
     if not custom_question.strip():
         st.caption("Enter a question and click `Run question`.")
         return
-    if not run_custom_query:
+    if not run_custom_query_clicked:
         st.caption("Click `Run question` to retrieve evidence and generate an answer.")
         return
 

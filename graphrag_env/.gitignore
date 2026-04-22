@@ -1,0 +1,18 @@
+# Ignore the virtualenv internals by default.
+*
+
+# Keep the repository-facing source tree and lightweight metadata.
+!.gitignore
+!requirements.txt
+!__init__.py
+!src/
+!src/**
+
+# Ignore Python caches inside the tracked source tree.
+src/__pycache__/
+src/*.pyc
+src/*.pyo
+
+# Keep heavyweight local outputs out of git even inside src/.
+src/*.pt
+src/llm_eval_results*.json

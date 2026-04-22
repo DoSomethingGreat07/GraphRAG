@@ -1,6 +1,8 @@
 # GraphRAG Multi-Hop Question Answering
 
-GraphRAG is a Streamlit application for multi-hop question answering over a HotpotQA-style Wikipedia corpus. It combines dense semantic retrieval with graph-based reasoning, optional GNN reranking, and optional LLM answer generation.
+GraphRAG now includes a React + Tailwind + TypeScript frontend backed by a FastAPI layer that reuses the existing multi-hop retrieval pipeline. The original Streamlit app is still in the repo as a fallback, but the recommended UI is the new web client in `frontend/`.
+
+Important: the large `artifacts/` bundle is intentionally not committed to GitHub. To run the app without rebuilding, place the shared `artifacts/` folder in the repo root. Otherwise, regenerate it locally with `prepare_artifacts.py`.
 
 This project is built around a simple idea:
 
@@ -27,25 +29,46 @@ The goal of this README is to explain the system end to end in a way that is eas
 
 ## Quick Start
 
-If we want the fastest path from clone to a working demo:
+If we want the fastest path from clone to the new web UI:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-python3 prepare_artifacts.py --max-samples 1000
-streamlit run app.py
+uvicorn backend.api:app --reload
 ```
 
-Then open the app and:
+Before starting the API, make sure `artifacts/` exists in the project root. If it does not, build it first:
 
-1. start with `Dataset Question Mode`
+```bash
+python3 prepare_artifacts.py --split train --max-samples 10000 --chunk-size 300 --chunk-overlap 50
+```
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Then open the Vite URL and:
+
+1. start with `Dataset Mode`
 2. keep retrieval mode on `Dense`
 3. verify artifacts load correctly
-4. train the GNN later if we want `Fusion` and `PCST`
+4. enable `Fusion` and `PCST` when the matching GNN checkpoint is present
 
 If we only want retrieval and do not need GPT-generated answers, we can still run the app without enabling answer generation in the UI.
+
+## Legacy Streamlit
+
+If we want the older Streamlit demo instead:
+
+```bash
+streamlit run app.py
+```
 
 ## Demo Walkthrough
 
