@@ -24,6 +24,7 @@ backend/__pycache__/
 artifacts/
 graphrag_env/src/*.pt
 graphrag_env/src/llm_eval_results*.json
+llm_eval_results*.json
 
 # Local notebooks and scratch files
 loading.txt

@@ -3,14 +3,20 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from embeddings import generate_chunk_embeddings
-from hybrid_graph_builder import build_hybrid_graphs_for_all_examples
-from gnn_train import (
-    QueryAwareGraphSAGE,
-    build_pyg_data_from_example,
-    build_pyg_dataset,
-    split_dataset,
-)
+try:
+    from .artifact_runtime import load_gnn_from_checkpoint, load_or_build_graph_examples
+    from .gnn_train import (
+        build_pyg_data_from_example,
+        build_pyg_dataset,
+        split_dataset,
+    )
+except ImportError:
+    from artifact_runtime import load_gnn_from_checkpoint, load_or_build_graph_examples
+    from gnn_train import (
+        build_pyg_data_from_example,
+        build_pyg_dataset,
+        split_dataset,
+    )
 
 
 @torch.no_grad()
@@ -171,13 +177,12 @@ if __name__ == "__main__":
     parser.add_argument("--semantic-min-sim", type=float, default=0.40)
     parser.add_argument("--keyword-overlap-threshold", type=int, default=3)
     parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--checkpoint", default="query_aware_graphsage_best.pt")
     args = parser.parse_args()
 
     stage_bar = tqdm(total=5, desc="GNN eval pipeline", unit="stage")
 
-    tqdm.write("Loading chunked examples and embeddings...")
-    chunked_examples, embed_model = generate_chunk_embeddings(
+    tqdm.write("Loading graph artifacts...")
+    graph_examples, embed_model = load_or_build_graph_examples(
         split=args.split,
         max_samples=args.max_samples,
         chunk_size=args.chunk_size,
@@ -185,16 +190,13 @@ if __name__ == "__main__":
         min_text_length=args.min_text_length,
         model_name=args.model_name,
         batch_size=args.batch_size,
-    )
-    stage_bar.update(1)
-
-    tqdm.write("Building hybrid graphs...")
-    graph_examples = build_hybrid_graphs_for_all_examples(
-        chunked_examples=chunked_examples,
         semantic_k=args.semantic_k,
         semantic_min_sim=args.semantic_min_sim,
         keyword_overlap_threshold=args.keyword_overlap_threshold,
     )
+    stage_bar.update(1)
+
+    tqdm.write("Preparing cached graph examples...")
     stage_bar.update(1)
 
     tqdm.write("Preparing held-out validation split...")
@@ -208,23 +210,15 @@ if __name__ == "__main__":
     stage_bar.update(1)
 
     tqdm.write("Loading GNN checkpoint...")
-    # Probe input_dim from the already-built pyg_dataset — no redundant
-    # build_pyg_data_from_example call just to read one shape field.
-    input_dim = pyg_dataset[0].x.shape[1]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    gnn_model = QueryAwareGraphSAGE(
-        input_dim=input_dim,
-        hidden_dim=256,
-        dropout=0.2,
-    ).to(device)
-
-    # weights_only=True suppresses the PyTorch 2.x deprecation warning
-    # and prevents arbitrary code execution from untrusted checkpoints.
-    gnn_model.load_state_dict(
-        torch.load(args.checkpoint, map_location=device, weights_only=True)
+    gnn_model, device, checkpoint_path = load_gnn_from_checkpoint(
+        graph_examples=graph_examples,
+        embed_model=embed_model,
+        split=args.split,
+        max_samples=args.max_samples,
+        chunk_size=args.chunk_size,
+        chunk_overlap=args.chunk_overlap,
     )
-    gnn_model.eval()
+    tqdm.write(f"Loaded GNN checkpoint from {checkpoint_path}")
     stage_bar.update(1)
 
     tqdm.write("Running GNN retrieval evaluation...")

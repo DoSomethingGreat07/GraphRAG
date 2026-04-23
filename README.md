@@ -1,666 +1,444 @@
 # GraphRAG Multi-Hop Question Answering
 
-GraphRAG now includes a React + Tailwind + TypeScript frontend backed by a FastAPI layer that reuses the existing multi-hop retrieval pipeline. The original Streamlit app is still in the repo as a fallback, but the recommended UI is the new web client in `frontend/`.
+## Overview
+This repository implements a GraphRAG-style multi-hop question answering system over HotpotQA distractor data and its Wikipedia-style supporting context. The project builds reusable offline artifacts from question-local documents, then serves interactive retrieval and optional answer generation through a Streamlit UI, with a separate FastAPI + React interface also included. The main retrieval pipeline combines dense embedding search, query-aware GraphSAGE node scoring, and PCST-style connected subgraph selection.
 
-Important: the large `artifacts/` bundle is intentionally not committed to GitHub. To run the app without rebuilding, place the shared `artifacts/` folder in the repo root. Otherwise, regenerate it locally with `prepare_artifacts.py`.
+## Key Features
+- Offline artifact preparation for chunked examples, embeddings, hybrid graphs, manifests, and lookup tables.
+- Streamlit application for interactive dataset-mode and custom-question retrieval.
+- Optional FastAPI backend and React frontend for a separate web UI.
+- Five implemented retrieval modes:
+  - `FAISS-only retrieval`
+  - `FAISS + heuristic PCST`
+  - `GNN retrieval`
+  - `Dense retrieval + Query-Aware GraphSAGE`
+  - `Dense retrieval + Query-Aware GraphSAGE + PCST (Main Method)`
+- Query-aware GraphSAGE training and checkpoint loading for graph-based retrieval modes.
+- Custom-question retrieval with exact search and optional ANN backends (`HNSW`, `IVF`) when `hnswlib` or `faiss` is available.
+- LLM-based answer evaluation using `gpt-4o-mini`.
+- Retrieval and LLM evaluation scripts, including comparison and plotting utilities.
 
-This project is built around a simple idea:
+## Architecture
 
-multi-hop questions are not just about finding the most similar passage, they are about finding the chain of evidence that connects the answer.
+### High-Level View
+- Offline preparation:
+  - Load HotpotQA distractor examples.
+  - Chunk each question’s local context documents.
+  - Embed each chunk with a SentenceTransformer model.
+  - Build a hybrid graph over chunk nodes.
+  - Save reusable artifacts under `artifacts/`.
+- Online question answering:
+  - Load a prepared artifact bundle.
+  - Run one of the retrieval modes on either dataset questions or custom questions.
+  - Optionally send retrieved evidence to `gpt-4o-mini` for answer generation.
 
-Instead of treating retrieval as a flat top-k ranking problem, this system builds a graph over chunked Wikipedia-style documents and uses that graph to surface bridge evidence that a standard RAG pipeline may miss.
+```text
+HotpotQA distractor split
+  -> question-local context documents
+  -> chunking
+  -> dense embeddings
+  -> hybrid graph construction
+  -> cached artifacts + optional GraphSAGE checkpoint
 
-## Why This Repo Is Useful
+User question / dataset example
+  -> retrieval mode selection
+  -> dense / GraphSAGE / fusion / PCST retrieval
+  -> retrieved evidence chunks
+  -> optional GPT-4o-mini answer generation
+  -> answer + supporting evidence in UI/API
+```
 
-- It shows a full GraphRAG workflow from data preparation to interactive QA.
-- It separates offline indexing from online inference, which makes the runtime app easier to understand.
-- It supports both evaluation on labeled dataset questions and open-ended custom questions.
-- It exposes multiple retrieval strategies so we can compare dense-only retrieval against graph-aware approaches.
-- It is practical to demo through Streamlit while still being structured enough to study as a research-style system.
+### Frontend
+- `app.py` provides the primary Streamlit experience.
+- `frontend/` contains an optional React 18 + Vite + Tailwind frontend that talks to the FastAPI backend.
 
-This repository is structured around two stages:
+### Backend
+- `backend/api.py` exposes a FastAPI API for profiles, examples, configuration, dataset queries, and custom queries.
+- `backend/service.py` contains runtime loading, retrieval orchestration, ANN candidate search, and optional answer generation.
 
-1. Offline preparation
-   Build chunked documents, embeddings, graphs, and lookup artifacts.
-2. Online inference
-   Run the Streamlit app and answer either predefined dataset questions or custom user questions from the indexed corpus.
+### Database / Storage
+- There is no database in the current codebase.
+- Persistent state is stored as local artifact files in `artifacts/`:
+  - pickled chunked examples
+  - pickled graph examples
+  - example lookup tables
+  - global merged example
+  - sample questions
+  - manifest JSON
+  - GNN checkpoint files
 
-The goal of this README is to explain the system end to end in a way that is easy to follow, from raw data to the final answer shown in the UI.
+### AI / ML Components
+- Dense embeddings: `sentence-transformers`, defaulting to `BAAI/bge-base-en-v1.5`.
+- Graph model: Query-aware GraphSAGE implemented with `torch-geometric`.
+- Main retrieval method: dense retrieval + query-aware GraphSAGE + PCST.
+- Answer generation and LLM evaluation: OpenAI `gpt-4o-mini`.
 
-## Quick Start
+### External Integrations
+- Hugging Face `datasets` for HotpotQA loading.
+- OpenAI API for optional answer generation and LLM evaluation.
+- Optional ANN libraries:
+  - `hnswlib`
+  - `faiss`
 
-If we want the fastest path from clone to the new web UI:
+## Repository Structure
+```text
+.
+├── app.py                              # Streamlit app
+├── prepare_artifacts.py                # Offline artifact build script
+├── requirements.txt                    # Minimal runtime dependencies for the app/API
+├── .env.example                        # Example environment variables
+├── backend/
+│   ├── api.py                          # FastAPI routes
+│   └── service.py                      # Retrieval + answer generation service layer
+├── frontend/
+│   ├── package.json                    # React/Vite scripts and dependencies
+│   └── src/
+│       ├── App.tsx                     # Main React UI
+│       ├── main.tsx                    # React entrypoint
+│       └── styles.css                  # Tailwind-backed styles
+├── graphrag_env/
+│   ├── requirements.txt                # Broader research/evaluation dependencies
+│   └── src/
+│       ├── loading.py                  # HotpotQA loading
+│       ├── chunking.py                 # Document chunking
+│       ├── embeddings.py               # Chunk embedding generation
+│       ├── hybrid_graph_builder.py     # Hybrid graph construction
+│       ├── gnn_train.py                # Query-aware GraphSAGE training
+│       ├── retrieval.py                # Dense retrieval
+│       ├── gnn_retrieval.py            # GNN retrieval
+│       ├── gnn_fusion_retreival.py     # Dense + GraphSAGE fusion retrieval
+│       ├── pcst.py                     # Learned PCST retrieval
+│       ├── pcst_dense_retrieval.py     # Dense-guided heuristic PCST retrieval
+│       ├── retrieval_eval.py           # Dense retrieval evaluation
+│       ├── compare_retrieval_modes.py  # Same-split comparison across all five modes
+│       ├── llm_eval.py                 # Answer-generation evaluation
+│       ├── plot_llm_eval_results.py    # LLM eval plotting utility
+│       ├── artifact_runtime.py         # Artifact and checkpoint loading
+│       └── artifact_utils.py           # Artifact pathing and save/load helpers
+├── artifacts/                          # Local artifact cache and checkpoints (not for Git)
+└── assets/diagrams/
+    └── overall-system-architecture-fusion-pcst.png
+```
 
+## Tech Stack
+
+### Frontend
+- Streamlit
+- React 18
+- TypeScript
+- Vite
+- Tailwind CSS
+
+### Backend
+- Python
+- FastAPI
+- Uvicorn
+
+### Database / Storage
+- Local filesystem artifacts (`.pkl`, `.json`, `.pt`)
+
+### AI / ML
+- `sentence-transformers`
+- `torch`
+- `torch-geometric`
+- `networkx`
+- `datasets`
+- OpenAI API
+
+### Dev / Evaluation / Visualization
+- `tqdm`
+- `matplotlib`
+- `seaborn`
+- `pandas`
+- `plotly`
+
+### Optional Retrieval Acceleration
+- `hnswlib`
+- `faiss-cpu`
+
+## How It Works
+1. `loading.py` pulls HotpotQA distractor examples and keeps each question’s local context documents together.
+2. `chunking.py` splits each context document into overlapping chunks while preserving question and title metadata.
+3. `embeddings.py` embeds each chunk with a SentenceTransformer model and stores per-example embedding matrices.
+4. `hybrid_graph_builder.py` builds a local graph for each question with chunk nodes and edges based on:
+   - same title
+   - adjacent chunk
+   - semantic kNN similarity
+   - keyword overlap
+5. `prepare_artifacts.py` saves chunked examples, graph examples, sample questions, lookup tables, a global merged corpus example, and a manifest under `artifacts/`.
+6. `gnn_train.py` converts examples into PyG graphs and trains a query-aware GraphSAGE model to score supporting chunks.
+7. At runtime, the app or API loads an artifact bundle and optionally the matching GraphSAGE checkpoint.
+8. Retrieval runs in one of five modes, from dense-only to the main GraphSAGE + PCST pipeline.
+9. Dataset-mode queries operate on known labeled examples and can compare retrieved titles with gold supporting titles.
+10. Custom queries first run dense retrieval over the global chunk pool, optionally through ANN indexes, then apply the selected reranker on the reduced candidate graph.
+11. If enabled, the retrieved chunks are packed into a prompt and sent to `gpt-4o-mini` for short answer generation.
+
+## Setup Instructions
+
+### 1. Clone the repository
+```bash
+git clone https://github.com/DoSomethingGreat07/graphrag-hotpotqa
+cd graphrag-hotpotqa
+```
+
+### 2. Create and activate a Python environment
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn backend.api:app --reload
 ```
 
-Before starting the API, make sure `artifacts/` exists in the project root. If it does not, build it first:
+### 3. Install Python dependencies
+For the main app/API:
+```bash
+pip install -r requirements.txt
+```
 
+For the broader research/evaluation toolchain under `graphrag_env/`:
+```bash
+pip install -r graphrag_env/requirements.txt
+```
+
+### 4. Configure environment variables
+```bash
+cp .env.example .env
+```
+
+Set the required values:
+```env
+OPENAI_API_KEY=your_key_here
+```
+
+### 5. Prepare artifacts
+If you do not already have the `artifacts/` directory, build it locally:
 ```bash
 python3 prepare_artifacts.py --split train --max-samples 10000 --chunk-size 300 --chunk-overlap 50
 ```
 
-In a second terminal:
+### 6. Train the GraphSAGE checkpoint if needed
+Graph-based modes require a trained checkpoint:
+```bash
+python3 graphrag_env/src/gnn_train.py
+```
 
+### 7. Run the app
+Primary Streamlit flow:
+```bash
+streamlit run app.py
+```
+
+Optional FastAPI backend:
+```bash
+uvicorn backend.api:app --reload
+```
+
+Optional React frontend:
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Then open the Vite URL and:
+## Environment Variables
+- `OPENAI_API_KEY`
+  - Used by `llm_eval.py`, `backend/service.py`, and the Streamlit app when answer generation is enabled.
+  - Required only for OpenAI-backed answer generation and LLM evaluation.
 
-1. start with `Dataset Mode`
-2. keep retrieval mode on `Dense`
-3. verify artifacts load correctly
-4. enable `Fusion` and `PCST` when the matching GNN checkpoint is present
+## Running the Project
 
-If we only want retrieval and do not need GPT-generated answers, we can still run the app without enabling answer generation in the UI.
+### Development
+- Streamlit app:
+  ```bash
+  streamlit run app.py
+  ```
+- FastAPI backend:
+  ```bash
+  uvicorn backend.api:app --reload
+  ```
+- React frontend:
+  ```bash
+  cd frontend
+  npm run dev
+  ```
 
-## Legacy Streamlit
-
-If we want the older Streamlit demo instead:
-
+### Frontend build
 ```bash
-streamlit run app.py
+cd frontend
+npm run build
+npm run preview
 ```
 
-## Demo Walkthrough
+### Retrieval evaluation
+- Dense:
+  ```bash
+  python3 -m graphrag_env.src.retrieval_eval --max-samples 10000 --top-k 5
+  ```
+- Dense-guided heuristic PCST:
+  ```bash
+  python3 -m graphrag_env.src.pcst_dense_retrieval --max-samples 10000 --top-k 5
+  ```
+- GNN:
+  ```bash
+  python3 -m graphrag_env.src.gnn_retrieval --max-samples 10000 --top-k 5
+  ```
+- Fusion:
+  ```bash
+  python3 -m graphrag_env.src.gnn_fusion_retreival --max-samples 10000 --top-k 5 --lambda-dense 0.5
+  ```
+- Main method:
+  ```bash
+  python3 -m graphrag_env.src.pcst --max-samples 10000 --top-k 5 --seed-k 5 --expansion-factor 5 --fusion-anchor-pool-factor 3 --pcst-bonus 0.08 --preserve-fusion-top-k 2 --title-diversity-bonus 0.03 --lambda-dense 0.5
+  ```
+- Same-split comparison across all five modes:
+  ```bash
+  python3 -m graphrag_env.src.compare_retrieval_modes --max-samples 10000 --top-k 5
+  ```
 
-Once the app is running, a typical flow looks like this:
-
-1. Select an artifact profile from the sidebar.
-2. Choose a retrieval mode: `Dense`, `Fusion`, or `PCST`.
-3. Open `Dataset Question Mode` to inspect known examples with gold supporting titles.
-4. Open `Custom Question Mode` to test free-form queries against the indexed corpus.
-5. Review retrieved titles and evidence chunks.
-6. Optionally enable GPT answer generation to synthesize a final answer from retrieved evidence.
-
-If we want to add screenshots later, this is a good place to include:
-
-- the main app landing page
-- dataset question mode with gold-title comparison
-- custom question mode with retrieved evidence
-- retrieval mode comparison table
-
-## What This Project Does
-
-Standard dense retrieval is often good at finding passages that look semantically similar to the question, but multi-hop questions usually require connecting facts across multiple documents.
-
-Example:
-
-`Where was the director of Titanic born?`
-
-To answer that, the system may need to retrieve:
-
-- a chunk about `Titanic`
-- a chunk about `James Cameron`
-- a chunk containing the birthplace fact
-
-This project is designed to improve retrieval for those kinds of questions by building a graph over the corpus and then reasoning over that graph.
-
-## High-Level Architecture
-
-The full pipeline looks like this:
-
-```text
-HotpotQA / Wikipedia-style data
-  -> document chunking
-  -> embedding generation
-  -> hybrid graph construction
-  -> cached artifacts saved to disk
-  -> Streamlit app loads artifacts
-  -> retrieval over indexed corpus
-  -> optional graph/GNN reranking
-  -> optional GPT answer generation
-  -> answer + evidence shown in UI
-```
-
-There are two main usage paths in the app:
-
-- `Dataset Question Mode`
-  Uses a known question from the indexed dataset. Ground-truth supporting titles are available, so the app can compare retrieved evidence against gold evidence.
-- `Custom Question Mode`
-  Uses any user-typed question. The system searches the indexed corpus, but there is no ground-truth label for that question, so only retrieved evidence can be shown.
-
-## Repository Lawet
-
-```text
-app.py                          Streamlit application
-prepare_artifacts.py            Offline artifact creation script
-requirements.txt                Python dependencies
-.env.example                    Example environment file
-artifacts/                      Generated artifact cache (not committed)
-graphrag_env/src/
-  artifact_runtime.py           Artifact loading and checkpoint loading
-  artifact_utils.py             Artifact pathing and save/load helpers
-  loading.py                    HotpotQA data loading
-  chunking.py                   Document chunking
-  embeddings.py                 Embedding generation
-  hybrid_graph_builder.py       Graph construction
-  retrieval.py                  Dense retrieval
-  gnn_fusion_retreival.py       Dense + GNN fusion retrieval
-  pcst.py                       PCST retrieval
-  gnn_train.py                  GNN training
-  llm_eval.py                   LLM answer generation
-```
-
-## End-to-End Flow
-
-### 1. Data Loading
-
-The pipeline begins by loading HotpotQA-style examples. Each example contains:
-
-- a question
-- an answer
-- multiple context documents
-- supporting facts for dataset-labeled questions
-
-In the distractor setting, a question may come with multiple context rows. Typically only a small subset are the true supporting documents, while the rest are distractors.
-
-### 2. Chunking
-
-Each context document is split into smaller text chunks. This helps retrieval because:
-
-- long documents are hard to embed and rank as a whole
-- smaller units give more precise matching
-- graph reasoning can operate at chunk level
-
-Chunk configuration is controlled by artifact parameters such as:
-
-- `chunk_size`
-- `chunk_overlap`
-
-### 3. Embedding Generation
-
-Each chunk is converted into a dense vector using a sentence-transformer model. The default artifact preparation currently uses:
-
-- `BAAI/bge-base-en-v1.5`
-
-At query time, the question is embedded with the same model so chunk similarity can be computed.
-
-### 4. Hybrid Graph Construction
-
-After chunking and embedding, the project builds a graph over the chunks. Nodes are chunks. Edges connect chunks that appear related based on corpus structure or content.
-
-The graph can include signals such as:
-
-- chunks from the same document
-- adjacent chunks
-- title or hyperlink-like mentions
-- keyword overlap
-- semantic relationships when enabled
-
-This graph is what allows graph-aware retrieval modes to expand beyond purely lexical or dense similarity.
-
-### 5. Artifact Creation
-
-The offline script [`prepare_artifacts.py`](/Users/nikhiljuluri/Desktop/GraphRAG/prepare_artifacts.py) saves reusable files into [`artifacts/`](/Users/nikhiljuluri/Desktop/GraphRAG/artifacts), including:
-
-- chunked examples
-- graph examples
-- example lookup table
-- one global merged example used for custom search
-- sample questions
-- a manifest describing the artifact profile
-
-These artifacts let the app start quickly without rebuilding the full pipeline every time.
-
-### 6. Optional GNN Training
-
-If we want to use `Fusion` and `PCST` retrieval modes fully, train the GNN checkpoint with:
-
+### LLM evaluation
 ```bash
-python3 graphrag_env/src/gnn_train.py
+python3 -m graphrag_env.src.llm_eval --retrieval-mode dense --max-samples 300 --top-k 5
+python3 -m graphrag_env.src.llm_eval --retrieval-mode pcst_dense --max-samples 300 --top-k 5
+python3 -m graphrag_env.src.llm_eval --retrieval-mode gnn --max-samples 300 --top-k 5
+python3 -m graphrag_env.src.llm_eval --retrieval-mode fusion --max-samples 300 --top-k 5
+python3 -m graphrag_env.src.llm_eval --retrieval-mode pcst --max-samples 300 --top-k 5
 ```
 
-Without a trained checkpoint, the app can still run in `Dense` mode.
-
-### 7. Runtime App Loading
-
-When the app starts, [`app.py`](/Users/nikhiljuluri/Desktop/GraphRAG/app.py) does the following:
-
-- discovers available artifact profiles from the manifest files
-- loads the selected artifact bundle
-- loads the embedding model named in the manifest
-- tries to load the GNN checkpoint for that profile
-- prepares global chunk and graph structures for custom retrieval
-- optionally prepares ANN indexes for custom question retrieval if `hnswlib` or `faiss` is installed
-
-### 8. Query-Time Retrieval
-
-At runtime, the app supports three retrieval modes:
-
-- `Dense`
-- `Fusion`
-- `PCST`
-
-These modes behave slightly differently depending on whether the question comes from the dataset or from custom input.
-
-## Dataset Question Mode
-
-Dataset mode is used for predefined indexed questions.
-
-Flow:
-
-1. Select a dataset question from the UI.
-2. Load the corresponding indexed example.
-3. Run retrieval with the selected mode.
-4. Show retrieved titles and evidence chunks.
-5. Compare retrieved titles to gold supporting titles.
-6. Optionally generate a final answer with GPT.
-
-Important property:
-
-- because these questions come from the labeled dataset, the app knows the gold supporting titles
-- this is why the UI can show both `Retrieved titles` and `Gold supporting titles`
-
-This makes dataset mode useful for inspection and qualitative evaluation.
-
-## Custom Question Mode
-
-Custom mode is used when a user types any free-form question.
-
-Flow:
-
-1. User enters a question.
-2. The question is embedded.
-3. The system searches the indexed corpus.
-4. A candidate pool is selected.
-5. Retrieval mode runs on those candidates.
-6. Retrieved evidence is shown.
-7. Optionally GPT generates the final answer from the retrieved chunks.
-
-Important property:
-
-- custom questions do not have dataset ground truth
-- the app cannot know the gold supporting titles unless the question exactly maps to a labeled dataset item and we explicitly build that lookup behavior
-- therefore custom mode shows retrieved evidence only
-
-## Retrieval Modes Explained
-
-### Dense
-
-Dense retrieval ranks chunks by embedding similarity to the question.
-
-This is the simplest mode and works even when there is no trained GNN checkpoint.
-
-Strengths:
-
-- simple
-- reliable baseline
-- fast compared with graph-heavy reasoning
-
-Limitations:
-
-- may miss bridge documents needed for multi-hop reasoning
-
-### Fusion
-
-Fusion combines dense retrieval signals with GNN-based scores.
-
-This mode is designed to preserve direct semantic relevance while also surfacing graph-supported bridge evidence.
-
-Strengths:
-
-- better at multi-hop evidence than dense alone
-- balances direct query similarity and graph-aware relevance
-
-Requirements:
-
-- trained GNN checkpoint
-
-### PCST
-
-PCST uses Prize-Collecting Steiner Tree style selection to choose a connected, high-value subgraph.
-
-This mode can be useful when the best answer depends on a connected chain of evidence rather than just the individually highest-scoring chunks.
-
-Strengths:
-
-- encourages coherent evidence selection
-- useful for multi-hop reasoning paths
-
-Requirements:
-
-- trained GNN checkpoint
-
-## Custom Retrieval Backends
-
-Custom questions support different first-pass retrieval backends:
-
-- `Exact`
-- `HNSW`
-- `IVF`
-
-These affect only `Custom Question Mode`.
-
-### Exact
-
-The app embeds the question and scores it against every indexed chunk embedding. This is exact but its latency grows with corpus size.
-
-Best for:
-
-- smaller corpora
-- debugging
-- maximum exactness
-
-### HNSW
-
-If `hnswlib` is installed, the app can use an HNSW approximate nearest-neighbor index for custom questions.
-
-Best for:
-
-- lower latency on larger corpora
-- interactive search
-
-### IVF
-
-If `faiss` is installed, the app can use an IVF index for custom questions.
-
-Best for:
-
-- larger-scale approximate retrieval with FAISS
-
-If ANN libraries are not installed, the app falls back to `Exact`.
-
-## Why Dataset Flow and Custom Flow Differ
-
-This distinction is important:
-
-- `Dataset Question Mode` works with a single labeled example that already has known supporting facts.
-- `Custom Question Mode` searches across the indexed global corpus and has no gold labels.
-
-So:
-
-- dataset mode can display gold supporting titles
-- custom mode cannot
-
-Also:
-
-- dataset mode preserves the original retrieval path for each indexed example
-- custom mode may use exact or ANN candidate search across the full indexed corpus before running graph-based retrieval on the smaller candidate pool
-
-## Artifact Profiles
-
-The app supports multiple artifact profiles. A profile is defined by settings like:
-
-- `split`
-- `max_samples`
-- `chunk_size`
-- `chunk_overlap`
-
-When we change the selected artifact profile in the sidebar, the app loads the corresponding:
-
-- manifest
-- example lookup
-- global example
-- graph examples
-- checkpoint, if available
-
-This makes it possible to compare different corpus sizes or chunking choices without changing application code.
-
-## How to Run the Project
-
-### 1. Clone the Repository
-
+### Plot LLM evaluation results
 ```bash
-git clone https://github.com/DoSomethingGreat07/graphrag-hotpotqa
-cd graphrag-hotpotqa
+python3 -m graphrag_env.src.plot_llm_eval_results --files llm_eval_results_dense.json llm_eval_results_pcst_dense.json llm_eval_results_gnn.json llm_eval_results_fusion.json llm_eval_results_pcst.json --output assets/diagrams/llm_eval_mode_comparison.png --summary-csv assets/diagrams/llm_eval_mode_summary.csv
 ```
 
-### 2. Create a Virtual Environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 3. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-Optional ANN dependencies for custom question acceleration:
-
-```bash
-pip install hnswlib
-```
-
-or
-
-```bash
-pip install faiss-cpu
-```
-
-### 4. Add Environment Variables
-
-Create a `.env` file from the example:
-
-```bash
-cp .env.example .env
-```
-
-Then set:
-
-```env
-OPENAI_API_KEY=wer_key_here
-```
-
-If we do not enable GPT answer generation in the UI, the app can still be used in retrieval-only mode.
-
-### 5. Build Artifacts
-
-Run:
-
-```bash
-python3 prepare_artifacts.py
-```
-
-This creates the cached files needed by the app under [`artifacts/`](/Users/nikhiljuluri/Desktop/GraphRAG/artifacts).
-
-Example with explicit parameters:
-
-```bash
-python3 prepare_artifacts.py \
-  --split train \
-  --max-samples 10000 \
-  --chunk-size 300 \
-  --chunk-overlap 50
-```
-
-### 6. Train the GNN Checkpoint
-
-If we want `Fusion` and `PCST`:
-
-```bash
-python3 graphrag_env/src/gnn_train.py
-```
-
-If we only need `Dense`, we can skip this step.
-
-### 7. Launch the App
-
-```bash
-streamlit run app.py
-```
-
-## Typical Usage
-
-### Evaluate Known Dataset Questions
-
-Use this when we want to inspect whether the system retrieves the known gold supporting evidence.
-
-Good for:
-
-- debugging retrieval quality
-- comparing Dense vs Fusion vs PCST
-- checking gold-title overlap
-
-### Ask Custom Questions
-
-Use this when we want to treat the system like a real QA application over the indexed corpus.
-
-Good for:
-
-- demos
-- qualitative testing
-- interactive exploration
-
-Best results usually come from:
-
-- multi-hop factoid questions
-- HotpotQA-style phrasing
-- questions whose evidence exists in the indexed corpus
-
-## What Gets Stored in `artifacts/`
-
-The `artifacts/` directory can become large, so it is intentionally excluded from git.
-
-It typically contains:
-
-- `*_manifest.json`
-- `*_chunked_examples.pkl`
-- `*_graph_examples.pkl`
-- `*_example_lookup.pkl`
-- `*_global_example.pkl`
-- `*_sample_questions.json`
-- GNN checkpoints for a matching artifact profile
-
-This separation keeps the repository lightweight while still allowing reproducible local builds.
-
-## Deployment Notes
-
-For GitHub:
-
-- commit source code
-- commit `README.md`, `requirements.txt`, `.env.example`, and `.gitignore`
-- do not commit `artifacts/`
-- do not commit local `.env`
-- do not commit caches, checkpoints, or editor metadata unless intentionally versioned
-
-For a fresh deployment environment:
-
-1. install dependencies
-2. create `.env`
-3. rebuild artifacts
-4. optionally train or copy the GNN checkpoint
-5. run `streamlit run app.py`
-
-If we plan to deploy to a hosted environment, make sure that:
-
-- the host has enough disk space for artifacts
-- model downloads are allowed
-- large artifact generation happens ahead of time if startup time matters
-
-## Known Practical Tradeoffs
-
-### Exact custom retrieval vs ANN custom retrieval
-
-Exact search:
-
-- scores against all indexed chunks
-- highest exactness
-- slower as corpus grows
-
-ANN search:
-
-- faster for larger corpora
-- approximate candidate selection
-- requires optional libraries like `hnswlib` or `faiss`
-
-### Dense vs graph-aware retrieval
-
-Dense:
-
-- simpler
-- usually faster
-- good baseline
-
-Fusion and PCST:
-
-- better for bridge-document style reasoning
-- more complex
-- require checkpoint support
-
-## Recommended First Run
-
-If we want the fastest path to seeing the app work:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-python3 prepare_artifacts.py --max-samples 1000
-streamlit run app.py
-```
-
-Then:
-
-- start in `Dataset Question Mode`
-- use `Dense`
-- verify artifacts loaded correctly
-- train the GNN later if we want `Fusion` and `PCST`
-
-## Troubleshooting
-
-### `Artifacts not found`
-
-Run:
-
-```bash
-python3 prepare_artifacts.py
-```
-
-### `GNN checkpoint not found`
-
-Run:
-
-```bash
-python3 graphrag_env/src/gnn_train.py
-```
-
-Or switch the app to `Dense` mode.
-
-### Custom ANN backend is not available
-
-Install one of:
-
-```bash
-pip install hnswlib
-```
-
-or
-
-```bash
-pip install faiss-cpu
-```
-
-Then restart the app.
-
-### GPT answers are unavailable
-
-Check:
-
-- `.env` exists
-- `OPENAI_API_KEY` is set
-- GPT answer generation is enabled in the sidebar
-
-## Summary
-
-This project is best understood as a two-stage GraphRAG system:
-
-1. build a searchable graph-structured corpus offline
-2. run retrieval and answer generation online through a Streamlit app
-
-If we are evaluating retrieval quality, use dataset mode.
-If we are demoing open-ended QA over the indexed corpus, use custom mode.
-
-Both flows share the same indexed knowledge base, but they differ in one critical way: dataset questions have gold evidence labels, while custom questions do not.
+## API Endpoints
+Based on `backend/api.py`:
+
+### `GET /api/health`
+Returns a simple health check.
+
+### `GET /api/profiles`
+Lists available artifact profiles discovered from manifest files in `artifacts/`.
+
+### `GET /api/config?profile_id=<id>`
+Returns runtime metadata for a selected artifact profile, including manifest info, sample questions, available custom backends, and whether a GNN checkpoint exists.
+
+### `GET /api/examples?profile_id=<id>&question_type=<type>`
+Returns dataset examples for the selected profile. `question_type` defaults to `all`.
+
+### `POST /api/query/dataset`
+Runs retrieval against a labeled dataset example.
+
+Request body fields:
+- `profile_id`
+- `example_id`
+- `retrieval_mode`
+- `top_k`
+- `lambda_dense`
+- `llm_enabled`
+- `compare_all_modes`
+
+### `POST /api/query/custom`
+Runs retrieval against a free-form custom question.
+
+Request body fields:
+- `profile_id`
+- `question`
+- `retrieval_mode`
+- `top_k`
+- `lambda_dense`
+- `llm_enabled`
+- `compare_all_modes`
+- `custom_backend`
+
+## Database / Schema
+No database schema or ORM models are present in the current repository.
+
+The closest thing to a persisted schema is the artifact layout defined in `artifact_utils.py`:
+- `<tag>_manifest.json`
+- `<tag>_chunked_examples.pkl`
+- `<tag>_graph_examples.pkl`
+- `<tag>_example_lookup.pkl`
+- `<tag>_global_example.pkl`
+- `<tag>_sample_questions.json`
+- `<tag>_query_aware_graphsage_best.pt`
+
+## Agent / AI Workflow
+
+### Retrieval modules
+- `retrieval.py`
+  - Dense retrieval over precomputed chunk embeddings.
+- `gnn_retrieval.py`
+  - Graph-only ranking with QueryAwareGraphSAGE.
+- `gnn_fusion_retreival.py`
+  - Blends normalized dense similarity and GraphSAGE scores.
+- `pcst_dense_retrieval.py`
+  - Runs heuristic PCST using dense scores as node prizes.
+- `pcst.py`
+  - Main method: dense + GraphSAGE fusion scores, then graph-aware PCST-style selection.
+
+### Training module
+- `gnn_train.py`
+  - Builds PyG graphs where each node feature includes:
+    - chunk embedding
+    - repeated query embedding
+    - dense similarity to the query
+  - Trains a binary supporting-chunk classifier with GraphSAGE.
+
+### Evaluation modules
+- `retrieval_eval.py`
+  - Dense retrieval metrics.
+- `compare_retrieval_modes.py`
+  - Same validation split comparison across all five retrieval modes.
+- `llm_eval.py`
+  - End-to-end answer EM/F1 evaluation using OpenAI.
+- `plot_llm_eval_results.py`
+  - Generates comparison charts and a summary CSV from saved `llm_eval` outputs.
+
+### Answer generation
+- Both the Streamlit app and FastAPI backend use `gpt-4o-mini` with a constrained JSON output format.
+- The prompt instructs the model to answer using only retrieved evidence and to return a short final answer.
+
+## Screenshots / Demo
+Architecture diagram:
+
+![Overall system architecture](assets/diagrams/overall-system-architecture-fusion-pcst.png)
+
+<!-- Add screenshots or demo GIFs here -->
+
+## Deployment
+Based on the current codebase, the project appears designed for local or self-managed deployment rather than a specific managed platform.
+
+What exists:
+- Streamlit app entrypoint: `app.py`
+- FastAPI backend: `backend/api.py`
+- React frontend build scripts in `frontend/package.json`
+
+What does not exist:
+- No `Dockerfile`
+- No `docker-compose.yml`
+- No Vercel, Netlify, or cloud deployment config
+- No CI/CD workflow for builds or deployment
+
+For a reproducible deployment, you will need:
+- a Python environment with the required dependencies
+- the prepared `artifacts/` directory
+- an OpenAI API key if answer generation is enabled
+- a trained GraphSAGE checkpoint if graph-based modes are required
+
+## Limitations / Future Improvements
+- The repository depends on local artifact files; without them, startup requires rebuilding from the HotpotQA dataset.
+- Graph-based modes depend on a checkpoint matching the selected artifact profile.
+- The React frontend hardcodes the API base to `http://127.0.0.1:8000/api`.
+- ANN acceleration is optional and depends on extra libraries not installed by the main `requirements.txt`.
+- There is no automated test suite in the current repository.
+- There is no containerized deployment configuration.
+- Some evaluation outputs and legacy scripts remain in `graphrag_env/src/`, so a public-facing cleanup pass may still be useful before publishing.
+
+## Contributing
+Contributions are easiest when they preserve the current separation of concerns:
+- offline artifact generation and training in `graphrag_env/src/`
+- runtime app logic in `app.py`
+- API orchestration in `backend/`
+- optional web UI in `frontend/`
+
+If you add new retrieval modes or artifact fields, update both the runtime apps and the evaluation scripts so the repo stays internally consistent.
+
+## License
+No license specified in the repository.

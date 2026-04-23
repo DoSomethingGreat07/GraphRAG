@@ -63,7 +63,13 @@ type QueryResponse = {
 
 const API_BASE = "http://127.0.0.1:8000/api";
 
-const retrievalModes = ["Dense", "Fusion", "PCST"] as const;
+const retrievalModes = [
+  "FAISS-only retrieval",
+  "FAISS + heuristic PCST",
+  "GNN retrieval",
+  "Dense retrieval + Query-Aware GraphSAGE",
+  "Dense retrieval + Query-Aware GraphSAGE + PCST (Main Method)"
+] as const;
 
 function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -73,7 +79,7 @@ function App() {
   const [questionType, setQuestionType] = useState("all");
   const [selectedExample, setSelectedExample] = useState("");
   const [activeTab, setActiveTab] = useState<"dataset" | "custom">("dataset");
-  const [retrievalMode, setRetrievalMode] = useState<(typeof retrievalModes)[number]>("Dense");
+  const [retrievalMode, setRetrievalMode] = useState<(typeof retrievalModes)[number]>("FAISS-only retrieval");
   const [topK, setTopK] = useState(5);
   const [lambdaDense, setLambdaDense] = useState(0.5);
   const [llmEnabled, setLlmEnabled] = useState(false);
@@ -206,12 +212,12 @@ function App() {
                 Multi-hop retrieval that feels like a product, not a notebook.
               </h1>
               <p className="max-w-2xl text-base text-white/78 sm:text-lg">
-                Explore dense, fusion, and PCST retrieval over the indexed HotpotQA-style corpus with a more intentional
-                workflow for benchmark inspection and custom questions.
+                Compare dense retrieval baselines against query-aware graph scoring and the final dense +
+                Query-Aware GraphSAGE + PCST retrieval pipeline over the indexed HotpotQA-style corpus.
               </p>
               <div className="flex flex-wrap gap-3 text-sm text-white/75">
                 <span className="rounded-full border border-white/15 bg-white/5 px-4 py-2">Bridge-aware evidence recovery</span>
-                <span className="rounded-full border border-white/15 bg-white/5 px-4 py-2">Optional GPT answer synthesis</span>
+                <span className="rounded-full border border-white/15 bg-white/5 px-4 py-2">Query-Aware GraphSAGE + PCST main method</span>
                 <span className="rounded-full border border-white/15 bg-white/5 px-4 py-2">Corpus-scale artifact reuse</span>
               </div>
             </div>
@@ -339,7 +345,7 @@ function App() {
                 ))}
               </div>
               <div className="rounded-full border border-slate/10 px-4 py-2 text-sm text-slate">
-                {config?.has_gnn ? "GNN checkpoint ready" : "Dense-only profile"}
+                {config?.has_gnn ? "GNN checkpoint ready" : "FAISS/heuristic-only profile"}
               </div>
             </div>
 

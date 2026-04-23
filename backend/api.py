@@ -25,7 +25,7 @@ app.add_middleware(
 
 class QueryRequest(BaseModel):
     profile_id: str
-    retrieval_mode: str = Field(default="Dense")
+    retrieval_mode: str = Field(default="FAISS-only retrieval")
     top_k: int = Field(default=5, ge=1, le=10)
     lambda_dense: float = Field(default=0.5, ge=0.0, le=1.0)
     llm_enabled: bool = False

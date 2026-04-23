@@ -1,0 +1,184 @@
+\documentclass[10pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{enumitem}
+
+\setlength{\parskip}{0.35em}
+\setlength{\parindent}{0pt}
+\setlist[itemize]{leftmargin=1.3em, topsep=2pt, itemsep=2pt}
+\setlist[enumerate]{leftmargin=1.4em, topsep=2pt, itemsep=2pt}
+
+\title{Project Status Update: GraphRAG for Multi-Hop Question Answering}
+
+\author{
+  Nikhil Juluri \\
+  CS 519: Machine Learning on Graphs
+  \and
+  Chinmay Kawle \\
+  CS 519: Machine Learning on Graphs
+}
+
+\date{April 21, 2026}
+
+\begin{document}
+
+\maketitle
+\small
+
+\begin{abstract}
+This report summarizes the current status of our CS 519 course project on graph-based retrieval-augmented generation (GraphRAG) for multi-hop question answering. The project studies whether graph structure over chunked Wikipedia-style documents can improve retrieval for questions that require chaining evidence across multiple sources. Our experiments evaluate dense retrieval, GNN-only retrieval, dense--GNN fusion, and PCST-based graph selection, together with optional LLM answer generation and a Streamlit demo. Preliminary results show that graph-aware retrieval improves evidence recovery and that fusion gives the strongest downstream answer quality among the tested modes.
+\end{abstract}
+
+\section{Introduction and Motivation}
+
+Multi-hop question answering is difficult because the answer often cannot be extracted from a single passage. Instead, a system must combine facts across multiple documents. In HotpotQA-style problems, a model may need to first identify an intermediate entity in one document and then retrieve a second document containing the final answer. If retrieval misses one link in that chain, answer generation fails regardless of how strong the language model is.
+
+This project is motivated by the limitation of standard dense retrieval in such settings. A dense retriever ranks chunks independently based on semantic similarity to the question, but multi-hop reasoning depends on relationships among retrieved pieces of evidence. For example, answering ``Where was the director of Titanic born?'' requires identifying the director from one passage and then locating a second passage containing the birthplace fact. A flat top-$k$ ranking may retrieve only part of that chain.
+
+Our approach is to build a graph over chunked documents and treat retrieval as a graph-aware reasoning problem. The system starts with dense embeddings, then augments them with graph structure and graph neural scoring to recover bridge evidence that may not be surfaced by dense similarity alone. We are also building the project as an end-to-end system rather than an isolated algorithmic experiment, so the current repository includes offline artifact creation, multiple retrieval modes, optional LLM answer generation, and an interactive user interface for both benchmark and custom questions.
+
+\section{Problem Formulation}
+
+We formulate the task as multi-hop question answering over a chunked Wikipedia-style corpus. Given a question $q$, a set of chunked passages $\mathcal{C} = \{c_1, c_2, \dots, c_n\}$, and a graph $G=(V,E)$ where each node corresponds to a chunk, the system must retrieve a small set of evidence chunks that collectively support the answer and then optionally generate a final answer from the retrieved context.
+
+This can be separated into two coupled subproblems:
+\begin{enumerate}
+    \item \textbf{Evidence retrieval:} recover the top-$k$ chunks whose titles and contents best cover the gold supporting evidence.
+    \item \textbf{Answer generation:} generate a short final answer using only the retrieved evidence.
+\end{enumerate}
+
+The main challenge is that relevant evidence is distributed across multiple documents. Dense retrieval alone may return locally similar but incomplete passages, while a graph-aware method can potentially expand from one relevant node to neighboring chunks that complete the reasoning path. In our implementation, dataset mode uses HotpotQA-style labeled examples with known supporting titles, which allows retrieval evaluation through support recall and partial support recall. Custom-question mode uses a merged indexed corpus without labels and is mainly used for qualitative testing and demonstration.
+
+\section{Methods}
+
+The current pipeline has two stages: offline artifact preparation and online inference.
+
+\subsection{Offline Preparation}
+
+The offline pipeline starts from HotpotQA distractor-format examples, each containing a question, answer, context documents, and supporting facts. We chunk documents into smaller units so that retrieval operates at a finer granularity than full articles. The main artifact profile currently used in the project is:
+\begin{itemize}
+    \item split: training
+    \item number of examples: 10{,}000
+    \item chunk size: 300
+    \item chunk overlap: 50
+    \item minimum retained text length: 20
+    \item embedding model: \texttt{BAAI/bge-base-en-v1.5}
+    \item embedding batch size: 64
+\end{itemize}
+
+The saved artifact manifest shows that this configuration produces 263{,}113 merged searchable chunks. These artifacts are cached so that the runtime system does not need to rebuild embeddings and graphs on every run.
+
+\subsection{Hybrid Graph Construction}
+
+After chunking and embedding, we build a hybrid graph where nodes correspond to chunks and edges encode structural and semantic relationships. The graph currently includes:
+\begin{itemize}
+    \item same-title edges between chunks from the same document,
+    \item adjacent-chunk edges within a title,
+    \item semantic kNN edges with \texttt{semantic\_k = 2},
+    \item semantic similarity threshold \texttt{semantic\_min\_sim = 0.40},
+    \item keyword overlap edges with threshold 3.
+\end{itemize}
+
+This graph is intended to make multi-hop evidence paths easier to recover than with flat retrieval alone.
+
+\subsection{Retrieval Modes}
+
+The project currently evaluates four retrieval configurations:
+\begin{itemize}
+    \item \textbf{Dense:} standard embedding similarity baseline.
+    \item \textbf{GNN:} query-aware graph neural scoring over local question graphs.
+    \item \textbf{Fusion:} combines dense and GNN scores using a weighted sum.
+    \item \textbf{PCST:} uses graph-aware node selection over the fused scores.
+\end{itemize}
+
+For custom questions, the app first retrieves a candidate pool from the global merged corpus. The custom candidate pool size is set to $\max(30,\min(50,8k))$ for final depth $k$. We also support approximate nearest-neighbor search when available. The HNSW backend uses cosine space with $M=16$ and \texttt{ef\_construction}=200, while the FAISS IVF backend uses an inner-product quantizer with \texttt{nlist} chosen approximately as $\sqrt{N}$.
+
+\subsection{Query-Aware GraphSAGE}
+
+The GNN module is a query-aware GraphSAGE model. For each node, we concatenate three components to build the feature vector:
+\begin{itemize}
+    \item the chunk embedding,
+    \item the repeated query embedding,
+    \item the chunk-query cosine similarity.
+\end{itemize}
+
+The architecture uses two GraphSAGE convolution layers, hidden dimension 256, batch normalization, dropout 0.2, a residual connection, and a final linear classifier. Training is framed as node classification, where positive labels correspond to supporting chunks. The current training configuration uses an 80/20 train-validation split, PyG batch size 16, Adam with learning rate $10^{-3}$ and weight decay $10^{-5}$, weighted binary cross-entropy, gradient clipping at 1.0, \texttt{ReduceLROnPlateau}, 20 maximum epochs, and early stopping patience 4.
+
+\subsection{Answer Generation}
+
+After retrieval, the system can optionally generate answers with an LLM. Our current answer-evaluation pipeline uses \texttt{gpt-4o-mini} with a constrained prompt that requires short JSON-formatted answers based only on the retrieved context. This lets us measure whether retrieval gains also improve final answer quality.
+
+\section{Preliminary Results}
+
+We now have two kinds of preliminary results: retrieval metrics and answer-level metrics.
+
+\subsection{Retrieval Metrics}
+
+For retrieval, we evaluate title-level support recall at top-5. Because of time constraints, not all runs were executed under exactly the same evaluation count. Dense retrieval was run on 1{,}000 questions, while GNN, Fusion, and PCST were run on a 1{,}000-sample setup that yielded a held-out validation subset of 200 questions. Even with that caveat, the trends are informative.
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Retrieval Mode} & \textbf{Support Recall@5} & \textbf{Partial Support Recall@5} \\
+\midrule
+Dense (1000 qns) & 0.7650 & 0.9920 \\
+GNN (200 val qns) & 0.8350 & 0.9950 \\
+Fusion (200 val qns) & 0.8450 & 0.9900 \\
+PCST (200 val qns) & 0.8350 & 0.9900 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The bridge-question breakdown is especially useful because bridge questions are the most graph-sensitive setting. The bridge support recall@5 values are 0.7442 for Dense, 0.8188 for GNN, 0.8313 for Fusion, and 0.8250 for PCST. Comparison-question support recall@5 values are 0.8556 for Dense, 0.9000 for GNN, 0.9000 for Fusion, and 0.8750 for PCST. These numbers suggest that graph-aware retrieval improves evidence recovery, especially for bridge reasoning.
+
+\subsection{Answer-Level Metrics}
+
+We also evaluated final answer quality using LLM answer generation. These runs were performed on 300 questions. The current exact match (EM) and F1 results are:
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Retrieval Mode} & \textbf{Answer EM} & \textbf{Answer F1} \\
+\midrule
+Dense & 0.6567 & 0.7305 \\
+GNN & 0.6500 & 0.7289 \\
+Fusion & 0.6733 & 0.7535 \\
+PCST & 0.6667 & 0.7468 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Fusion currently gives the best overall answer quality, improving over Dense by about 1.7 EM points and 2.3 F1 points. GNN-only retrieval achieves 0.6500 EM and 0.7289 F1, which is close to the dense baseline but still below Fusion and PCST. This suggests that GNN-only ranking is helpful for evidence recovery, but combining dense and graph-based signals gives the strongest downstream answer quality.
+
+The per-type breakdown shows a similar pattern. For bridge questions, GNN achieves bridge EM 0.6371 and bridge F1 0.7238, while Fusion improves to bridge EM 0.6624 and bridge F1 0.7508. For comparison questions, GNN reaches comparison EM 0.6984 and comparison F1 0.7480, while PCST reaches the strongest comparison F1 among the saved answer-level runs.
+
+Overall, the preliminary results support the main hypothesis of the project: graph-aware retrieval improves evidence quality, and dense--graph fusion appears more effective than either dense retrieval or GNN-only retrieval by itself.
+
+\section{Future Plans}
+
+The next phase of the project will focus on improving both evaluation rigor and model quality.
+
+First, we plan to standardize evaluation so that all retrieval modes are measured on the same sample counts and the same held-out split. Right now, the Dense retrieval metrics and the graph-aware retrieval metrics were collected under slightly different evaluation counts, which is acceptable for a status update but not ideal for a final report.
+
+Second, we plan to improve graph construction. Current edges already include title structure, adjacency, semantic similarity, and keyword overlap, but the graph could be made stronger with better edge weighting, title-link heuristics, or entity-based connections. Since bridge questions depend strongly on graph quality, this is a natural area for improvement.
+
+Third, we plan to tune the model and selection strategies further. Important directions include adjusting the dense/GNN fusion weight, refining chunk-level labels, tuning candidate-pool size for custom retrieval, and exploring whether PCST should favor stronger connectivity or higher local confidence. We also want to compare dense-only, GNN-only, Fusion, and PCST under a single unified evaluation script.
+
+Finally, we plan to improve the demo and final report. The Streamlit interface can be extended with graph statistics, support-title overlap summaries, and side-by-side mode comparisons. The final report will include a more systematic retrieval table, answer-level ablations, and qualitative case studies showing both successful and failed multi-hop retrieval chains.
+
+\section{Conclusion}
+
+The project is now in a strong intermediate state. We have a functioning GraphRAG system with artifact generation, graph construction, GNN reranking, custom question support, and multiple retrieval modes. Preliminary retrieval metrics show gains from graph-aware methods over a dense-only baseline, especially on bridge questions, and the answer-level evaluation shows that Fusion currently delivers the best overall final-answer performance among the tested settings.
+
+The most important remaining work is to unify evaluation protocols and improve graph quality, but even at this stage the results support the central idea of the project: for multi-hop question answering, explicitly modeling relationships between evidence chunks using graph-based methods is more effective than relying on flat dense retrieval alone.
+
+\end{document}

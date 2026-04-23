@@ -163,13 +163,18 @@ def multiseed_pcst_selection(
 # ──────────────────────────────────────────────
 
 @torch.no_grad()
-def pcst_retrieve_for_example(
+def pcst_retrieve_with_details_for_example(
     example,
     embed_model,
     gnn_model,
     device,
     top_k: int = 5,
     seed_k: int = 3,
+    expansion_factor: int = 4,
+    fusion_anchor_pool_factor: int = 2,
+    pcst_bonus: float = 0.05,
+    preserve_fusion_top_k: int = 2,
+    title_diversity_bonus: float = 0.03,
     lambda_dense: float = 0.5,
     query_prefix: str = "Represent this sentence for searching relevant passages: ",
 ):
@@ -183,13 +188,16 @@ def pcst_retrieve_for_example(
         "gold_titles":      example["supporting_facts"]["title"],
         "retrieved_chunks": [],
         "retrieved_titles": [],
+        "dense_scores":     [],
+        "gnn_scores":       [],
         "fusion_scores":    [],
+        "selected_nodes":   [],
     }
 
     if len(chunks) == 0:
         return empty_result
 
-    _, _, fusion_scores = compute_fusion_scores(
+    dense_scores_norm, gnn_scores_norm, fusion_scores = compute_fusion_scores(
         example=example,
         embed_model=embed_model,
         gnn_model=gnn_model,
@@ -198,15 +206,67 @@ def pcst_retrieve_for_example(
         query_prefix=query_prefix,
     )
 
+    expanded_node_budget = min(
+        len(chunks),
+        max(top_k, top_k * max(1, expansion_factor)),
+    )
+
     selected_indices = multiseed_pcst_selection(
         example=example,
         fusion_scores=fusion_scores,
         seed_k=seed_k,
-        max_nodes=top_k,
+        max_nodes=expanded_node_budget,
     )
 
-    retrieved_chunks        = [chunks[i]               for i in selected_indices]
-    retrieved_fusion_scores = [float(fusion_scores[i]) for i in selected_indices]
+    # Preserve a wider fusion candidate pool and let PCST act as a graph-aware
+    # booster over that pool instead of a hard replacement. This gives learned
+    # PCST a chance to improve recall without discarding strong fusion hits too
+    # early.
+    fusion_anchor_pool_size = min(
+        len(chunks),
+        max(top_k, top_k * max(1, fusion_anchor_pool_factor)),
+    )
+    fusion_anchor_indices = np.argsort(fusion_scores)[::-1][:fusion_anchor_pool_size].tolist()
+    preserved_anchor_indices = fusion_anchor_indices[: min(preserve_fusion_top_k, top_k, len(fusion_anchor_indices))]
+
+    candidate_union = list(dict.fromkeys(fusion_anchor_indices + selected_indices))
+    final_score_map = {}
+    selected_set = set(selected_indices)
+    for idx in candidate_union:
+        bonus = pcst_bonus if idx in selected_set else 0.0
+        final_score_map[idx] = float(fusion_scores[idx] + bonus)
+
+    final_indices = []
+    seen_titles = set()
+
+    for idx in preserved_anchor_indices:
+        final_indices.append(idx)
+        seen_titles.add(chunks[idx].metadata["title"])
+
+    remaining_candidates = [idx for idx in candidate_union if idx not in final_indices]
+    while len(final_indices) < min(top_k, len(candidate_union)) and remaining_candidates:
+        best_idx = None
+        best_score = -np.inf
+
+        for idx in remaining_candidates:
+            title = chunks[idx].metadata["title"]
+            diversity_bonus = title_diversity_bonus if title not in seen_titles else 0.0
+            candidate_score = final_score_map[idx] + diversity_bonus
+            if candidate_score > best_score:
+                best_score = candidate_score
+                best_idx = idx
+
+        if best_idx is None:
+            break
+
+        final_indices.append(best_idx)
+        seen_titles.add(chunks[best_idx].metadata["title"])
+        remaining_candidates.remove(best_idx)
+
+    retrieved_chunks        = [chunks[i]               for i in final_indices]
+    retrieved_dense_scores  = [float(dense_scores_norm[i]) for i in final_indices]
+    retrieved_gnn_scores    = [float(gnn_scores_norm[i]) for i in final_indices]
+    retrieved_fusion_scores = [float(fusion_scores[i]) for i in final_indices]
 
     # Keep the MAX fusion score per title instead of silently dropping
     # chunks from the same title. Re-sort titles by that best score.
@@ -231,8 +291,47 @@ def pcst_retrieve_for_example(
         **empty_result,
         "retrieved_chunks": retrieved_chunks,
         "retrieved_titles": retrieved_titles,
+        "dense_scores":     retrieved_dense_scores,
+        "gnn_scores":       retrieved_gnn_scores,
         "fusion_scores":    retrieved_fusion_scores,
+        "selected_nodes":   final_indices,
+        "expanded_candidate_nodes": selected_indices,
+        "fusion_anchor_nodes": fusion_anchor_indices,
+        "preserved_anchor_nodes": preserved_anchor_indices,
     }
+
+
+@torch.no_grad()
+def pcst_retrieve_for_example(
+    example,
+    embed_model,
+    gnn_model,
+    device,
+    top_k: int = 5,
+    seed_k: int = 3,
+    expansion_factor: int = 4,
+    fusion_anchor_pool_factor: int = 2,
+    pcst_bonus: float = 0.05,
+    preserve_fusion_top_k: int = 2,
+    title_diversity_bonus: float = 0.03,
+    lambda_dense: float = 0.5,
+    query_prefix: str = "Represent this sentence for searching relevant passages: ",
+):
+    return pcst_retrieve_with_details_for_example(
+        example=example,
+        embed_model=embed_model,
+        gnn_model=gnn_model,
+        device=device,
+        top_k=top_k,
+        seed_k=seed_k,
+        expansion_factor=expansion_factor,
+        fusion_anchor_pool_factor=fusion_anchor_pool_factor,
+        pcst_bonus=pcst_bonus,
+        preserve_fusion_top_k=preserve_fusion_top_k,
+        title_diversity_bonus=title_diversity_bonus,
+        lambda_dense=lambda_dense,
+        query_prefix=query_prefix,
+    )
 
 
 # ──────────────────────────────────────────────
@@ -246,6 +345,11 @@ def pcst_retrieve_all(
     device,
     top_k: int = 5,
     seed_k: int = 3,
+    expansion_factor: int = 4,
+    fusion_anchor_pool_factor: int = 2,
+    pcst_bonus: float = 0.05,
+    preserve_fusion_top_k: int = 2,
+    title_diversity_bonus: float = 0.03,
     lambda_dense: float = 0.5,
     query_prefix: str = "Represent this sentence for searching relevant passages: ",
 ):
@@ -259,6 +363,11 @@ def pcst_retrieve_all(
             device=device,
             top_k=top_k,
             seed_k=seed_k,
+            expansion_factor=expansion_factor,
+            fusion_anchor_pool_factor=fusion_anchor_pool_factor,
+            pcst_bonus=pcst_bonus,
+            preserve_fusion_top_k=preserve_fusion_top_k,
+            title_diversity_bonus=title_diversity_bonus,
             lambda_dense=lambda_dense,
             query_prefix=query_prefix,
         )
@@ -331,7 +440,12 @@ if __name__ == "__main__":
     parser.add_argument("--semantic-min-sim", type=float, default=0.40)
     parser.add_argument("--keyword-overlap-threshold", type=int, default=3)
     parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--seed-k", type=int, default=3)
+    parser.add_argument("--seed-k", type=int, default=4)
+    parser.add_argument("--expansion-factor", type=int, default=4)
+    parser.add_argument("--fusion-anchor-pool-factor", type=int, default=2)
+    parser.add_argument("--pcst-bonus", type=float, default=0.05)
+    parser.add_argument("--preserve-fusion-top-k", type=int, default=2)
+    parser.add_argument("--title-diversity-bonus", type=float, default=0.03)
     parser.add_argument("--lambda-dense", type=float, default=0.5)
     args = parser.parse_args()
 
@@ -377,6 +491,11 @@ if __name__ == "__main__":
         device=device,
         top_k=args.top_k,
         seed_k=args.seed_k,
+        expansion_factor=args.expansion_factor,
+        fusion_anchor_pool_factor=args.fusion_anchor_pool_factor,
+        pcst_bonus=args.pcst_bonus,
+        preserve_fusion_top_k=args.preserve_fusion_top_k,
+        title_diversity_bonus=args.title_diversity_bonus,
         lambda_dense=args.lambda_dense,
     )
 

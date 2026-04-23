@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import argparse
 import string
 import collections
 from datetime import datetime
@@ -20,6 +21,7 @@ try:
     from .retrieval import retrieve_for_all_examples
     from .gnn_fusion_retreival import dense_gnn_fusion_retrieve_for_all_examples
     from .pcst import pcst_retrieve_all
+    from .pcst_dense_retrieval import pcst_dense_retrieve_all
 except ImportError:
     from artifact_runtime import (
         load_artifact_bundle,
@@ -30,6 +32,7 @@ except ImportError:
     from retrieval import retrieve_for_all_examples
     from gnn_fusion_retreival import dense_gnn_fusion_retrieve_for_all_examples
     from pcst import pcst_retrieve_all
+    from pcst_dense_retrieval import pcst_dense_retrieve_all
 
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
@@ -37,6 +40,20 @@ load_dotenv(ENV_PATH)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+RETRIEVAL_MODE_LABELS = {
+    "dense": "FAISS-only retrieval",
+    "pcst_dense": "FAISS + heuristic PCST",
+    "gnn": "GNN retrieval",
+    "fusion": "Dense retrieval + Query-Aware GraphSAGE",
+    "pcst": "Dense retrieval + Query-Aware GraphSAGE + PCST (Main Method)",
+}
+PCST_LEARNED_SEED_K = 5
+PCST_LEARNED_EXPANSION_FACTOR = 5
+PCST_LEARNED_FUSION_ANCHOR_POOL_FACTOR = 3
+PCST_LEARNED_BONUS = 0.08
+PCST_LEARNED_PRESERVE_FUSION_TOP_K = 2
+PCST_LEARNED_TITLE_DIVERSITY_BONUS = 0.03
 
 
 # =========================
@@ -89,23 +106,83 @@ def f1_score(prediction: str, ground_truth: str) -> float:
 # Answer generation
 # =========================
 
-def build_context_from_chunks(retrieved_chunks, top_k: int = 5) -> str:
-    context_parts = []
+def _truncate_chunk_text(text: str, max_chars: int) -> str:
+    text = " ".join(text.split()).strip()
+    if len(text) <= max_chars:
+        return text
 
-    for chunk in retrieved_chunks[:top_k]:
+    truncated = text[:max_chars].rsplit(" ", 1)[0].strip()
+    return truncated if truncated else text[:max_chars].strip()
+
+
+def select_context_chunks(
+    retrieved_chunks,
+    top_k: int = 5,
+    retrieval_mode: str | None = None,
+):
+    selected_chunks = []
+
+    if retrieval_mode == "pcst":
+        # For the main method, bias the context toward title diversity first.
+        # This keeps the evidence chain broad instead of spending too much of
+        # the prompt budget on multiple chunks from the same source title.
+        seen_titles = set()
+        remaining = []
+
+        for chunk in retrieved_chunks[: max(top_k * 2, top_k)]:
+            title = chunk.metadata.get("title", "Unknown Title")
+            if title not in seen_titles and len(selected_chunks) < top_k:
+                selected_chunks.append(chunk)
+                seen_titles.add(title)
+            else:
+                remaining.append(chunk)
+
+        for chunk in remaining:
+            if len(selected_chunks) >= top_k:
+                break
+            selected_chunks.append(chunk)
+
+        return selected_chunks[:top_k]
+
+    return retrieved_chunks[:top_k]
+
+
+def build_context_from_chunks(
+    retrieved_chunks,
+    top_k: int = 5,
+    retrieval_mode: str | None = None,
+) -> str:
+    context_parts = []
+    effective_top_k = top_k
+    max_chars_per_chunk = 650 if retrieval_mode == "pcst" else 900
+
+    for chunk in select_context_chunks(
+        retrieved_chunks=retrieved_chunks,
+        top_k=effective_top_k,
+        retrieval_mode=retrieval_mode,
+    ):
         title = chunk.metadata.get("title", "Unknown Title")
-        text = chunk.page_content.strip()
+        text = _truncate_chunk_text(chunk.page_content, max_chars=max_chars_per_chunk)
 
         context_parts.append(f"Title: {title}\n{text}")
 
     return "\n\n".join(context_parts)
 
 
-def generate_answer_openai(question: str, retrieved_chunks, top_k: int = 5) -> str:
+def generate_answer_openai(
+    question: str,
+    retrieved_chunks,
+    top_k: int = 5,
+    retrieval_mode: str | None = None,
+) -> str:
     if client is None:
         return "OPENAI_API_KEY not set"
 
-    context = build_context_from_chunks(retrieved_chunks, top_k=top_k)
+    context = build_context_from_chunks(
+        retrieved_chunks,
+        top_k=top_k,
+        retrieval_mode=retrieval_mode,
+    )
 
     prompt = f"""
 Answer the question using ONLY the provided context.
@@ -202,10 +279,23 @@ def run_retrieval(
             gnn_model=gnn_model,
             device=device,
             top_k=top_k,
+            seed_k=min(PCST_LEARNED_SEED_K, top_k),
+            expansion_factor=PCST_LEARNED_EXPANSION_FACTOR,
+            fusion_anchor_pool_factor=PCST_LEARNED_FUSION_ANCHOR_POOL_FACTOR,
+            pcst_bonus=PCST_LEARNED_BONUS,
+            preserve_fusion_top_k=min(PCST_LEARNED_PRESERVE_FUSION_TOP_K, top_k),
+            title_diversity_bonus=PCST_LEARNED_TITLE_DIVERSITY_BONUS,
             lambda_dense=0.5,
         )
 
-    raise ValueError("Invalid RETRIEVAL_MODE. Use one of: dense, gnn, fusion, pcst")
+    if retrieval_mode == "pcst_dense":
+        return pcst_dense_retrieve_all(
+            graph_examples=graph_examples,
+            embed_model=embed_model,
+            top_k=top_k,
+        )
+
+    raise ValueError("Invalid RETRIEVAL_MODE. Use one of: dense, pcst_dense, gnn, fusion, pcst")
 
 
 # =========================
@@ -213,14 +303,30 @@ def run_retrieval(
 # =========================
 
 if __name__ == "__main__":
-    RETRIEVAL_MODE = "gnn"   # dense / gnn / fusion / pcst
-    MAX_SAMPLES = 300
-    TOP_K = 5
-    SPLIT = "train"
-    CHUNK_SIZE = 300
-    CHUNK_OVERLAP = 50
+    parser = argparse.ArgumentParser(description="Run LLM answer evaluation for one of the five retrieval modes.")
+    parser.add_argument(
+        "--retrieval-mode",
+        default="gnn",
+        choices=["dense", "pcst_dense", "gnn", "fusion", "pcst"],
+    )
+    parser.add_argument("--max-samples", type=int, default=300)
+    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--split", default="train")
+    parser.add_argument("--chunk-size", type=int, default=300)
+    parser.add_argument("--chunk-overlap", type=int, default=50)
+    args = parser.parse_args()
+
+    RETRIEVAL_MODE = args.retrieval_mode
+    RETRIEVAL_MODE_LABEL = RETRIEVAL_MODE_LABELS[RETRIEVAL_MODE]
+    MAX_SAMPLES = args.max_samples
+    TOP_K = args.top_k
+    SPLIT = args.split
+    CHUNK_SIZE = args.chunk_size
+    CHUNK_OVERLAP = args.chunk_overlap
 
     output_file = f"llm_eval_results_{RETRIEVAL_MODE}.json"
+
+    print(f"Retrieval mode: {RETRIEVAL_MODE_LABEL} [{RETRIEVAL_MODE}]")
 
     print("Loading data...")
     try:
@@ -313,6 +419,7 @@ if __name__ == "__main__":
             question=question,
             retrieved_chunks=retrieved_chunks,
             top_k=TOP_K,
+            retrieval_mode=RETRIEVAL_MODE,
         )
 
         em = exact_match(prediction, gold_answer)
@@ -351,6 +458,7 @@ if __name__ == "__main__":
 
     metrics = {
         "retrieval_mode": RETRIEVAL_MODE,
+        "retrieval_mode_label": RETRIEVAL_MODE_LABEL,
         "total_questions": total,
         "answer_em": em_total / total if total else 0.0,
         "answer_f1": f1_total / total if total else 0.0,

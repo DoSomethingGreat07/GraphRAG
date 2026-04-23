@@ -20,11 +20,13 @@ except ImportError:
 
 from graphrag_env.src.artifact_runtime import load_artifact_bundle, load_gnn_from_checkpoint
 from graphrag_env.src.gnn_fusion_retreival import dense_gnn_fusion_retrieve_for_example
+from graphrag_env.src.gnn_retrieval import gnn_retrieve_for_example
 from graphrag_env.src.hybrid_graph_builder import graph_stats
 from graphrag_env.src.llm_eval import generate_answer_openai
+from graphrag_env.src.pcst_dense_retrieval import (
+    pcst_dense_retrieve_for_example,
+)
 from graphrag_env.src.pcst import (
-    compute_fusion_scores,
-    multiseed_pcst_selection,
     pcst_retrieve_for_example,
 )
 from graphrag_env.src.retrieval import retrieve_top_k_chunks_for_example
@@ -32,8 +34,8 @@ from graphrag_env.src.retrieval import retrieve_top_k_chunks_for_example
 
 APP_TITLE = "GraphRAG Multi-Hop Question Answering System"
 APP_SUBTITLE = (
-    "Answer HotpotQA-style multi-hop factoid questions using dense retrieval, "
-    "graph reasoning, GNN fusion, and multi-seed PCST over an indexed corpus."
+    "Compare dense retrieval baselines against query-aware graph scoring and "
+    "the final dense + Query-Aware GraphSAGE + PCST retrieval pipeline."
 )
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
@@ -46,6 +48,25 @@ DEFAULT_PROFILE = {
 CUSTOM_BACKEND_EXACT = "Exact"
 CUSTOM_BACKEND_HNSW = "HNSW"
 CUSTOM_BACKEND_IVF = "IVF"
+MODE_DENSE = "FAISS-only retrieval"
+MODE_PCST_DENSE = "FAISS + heuristic PCST"
+MODE_GNN = "GNN retrieval"
+MODE_FUSION = "Dense retrieval + Query-Aware GraphSAGE"
+MODE_PCST_LEARNED = "Dense retrieval + Query-Aware GraphSAGE + PCST (Main Method)"
+PCST_LEARNED_SEED_K = 5
+PCST_LEARNED_EXPANSION_FACTOR = 5
+PCST_LEARNED_FUSION_ANCHOR_POOL_FACTOR = 3
+PCST_LEARNED_BONUS = 0.08
+PCST_LEARNED_PRESERVE_FUSION_TOP_K = 2
+PCST_LEARNED_TITLE_DIVERSITY_BONUS = 0.03
+RETRIEVAL_MODES = [
+    MODE_DENSE,
+    MODE_PCST_DENSE,
+    MODE_GNN,
+    MODE_FUSION,
+    MODE_PCST_LEARNED,
+]
+GNN_REQUIRED_MODES = {MODE_GNN, MODE_FUSION, MODE_PCST_LEARNED}
 
 
 def discover_artifact_profiles():
@@ -81,7 +102,7 @@ def discover_artifact_profiles():
 
 
 @st.cache_resource(show_spinner=False)
-def load_demo_bundle(split: str, max_samples: int, chunk_size: int, chunk_overlap: int):
+def load_base_resources(split: str, max_samples: int, chunk_size: int, chunk_overlap: int):
     bundle = load_artifact_bundle(
         split=split,
         max_samples=max_samples,
@@ -90,36 +111,45 @@ def load_demo_bundle(split: str, max_samples: int, chunk_size: int, chunk_overla
     )
     embed_model = SentenceTransformer(bundle["manifest"]["model_name"])
 
-    gnn_model = None
-    device = None
-    checkpoint_path = None
-
-    try:
-        gnn_model, device, checkpoint_path = load_gnn_from_checkpoint(
-            graph_examples=bundle["graph_examples"],
-            embed_model=embed_model,
-            split=split,
-            max_samples=max_samples,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-        )
-    except FileNotFoundError:
-        pass
-
-    ann_indexes = build_custom_ann_indexes(bundle["global_example"]["context_chunk_embeddings"])
-
     return {
         **bundle,
         "embed_model": embed_model,
-        "gnn_model": gnn_model,
-        "device": device,
-        "checkpoint_path": str(checkpoint_path) if checkpoint_path else None,
+        "gnn_model": None,
+        "device": None,
+        "checkpoint_path": None,
         "global_chunks": bundle["global_example"]["context_chunks"],
         "global_embeddings": bundle["global_example"]["context_chunk_embeddings"],
         "global_graph": bundle["global_example"]["graph"],
         "chunk_to_example_id": bundle["global_example"].get("chunk_to_example_id", []),
-        "custom_ann_indexes": ann_indexes,
+        "custom_ann_indexes": {
+            CUSTOM_BACKEND_HNSW: None,
+            CUSTOM_BACKEND_IVF: None,
+        },
     }
+
+
+@st.cache_resource(show_spinner=False)
+def load_cached_gnn_resources(split: str, max_samples: int, chunk_size: int, chunk_overlap: int):
+    resources = load_base_resources(split, max_samples, chunk_size, chunk_overlap)
+    gnn_model, device, checkpoint_path = load_gnn_from_checkpoint(
+        graph_examples=resources["graph_examples"],
+        embed_model=resources["embed_model"],
+        split=split,
+        max_samples=max_samples,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+    return {
+        "gnn_model": gnn_model,
+        "device": device,
+        "checkpoint_path": str(checkpoint_path),
+    }
+
+
+@st.cache_resource(show_spinner=False)
+def load_cached_ann_indexes(split: str, max_samples: int, chunk_size: int, chunk_overlap: int):
+    resources = load_base_resources(split, max_samples, chunk_size, chunk_overlap)
+    return build_custom_ann_indexes(resources["global_embeddings"])
 
 
 def build_custom_ann_indexes(global_embeddings):
@@ -161,14 +191,56 @@ def build_custom_ann_indexes(global_embeddings):
 
 def get_custom_backend_options(resources):
     options = [CUSTOM_BACKEND_EXACT]
-    ann_indexes = resources.get("custom_ann_indexes", {})
-
-    if ann_indexes.get(CUSTOM_BACKEND_HNSW) is not None:
+    if hnswlib is not None and len(resources.get("global_embeddings", [])) > 0:
         options.append(CUSTOM_BACKEND_HNSW)
-    if ann_indexes.get(CUSTOM_BACKEND_IVF) is not None:
+    if faiss is not None and len(resources.get("global_embeddings", [])) >= 100:
         options.append(CUSTOM_BACKEND_IVF)
 
     return options
+
+
+def get_runtime_resources(
+    profile,
+    retrieval_mode: str,
+    compare_all_modes: bool,
+    custom_backend: str = CUSTOM_BACKEND_EXACT,
+):
+    resources = load_base_resources(
+        split=profile["split"],
+        max_samples=profile["max_samples"],
+        chunk_size=profile["chunk_size"],
+        chunk_overlap=profile["chunk_overlap"],
+    )
+    runtime_resources = dict(resources)
+
+    if retrieval_mode in GNN_REQUIRED_MODES or compare_all_modes:
+        try:
+            runtime_resources.update(
+                load_cached_gnn_resources(
+                    split=profile["split"],
+                    max_samples=profile["max_samples"],
+                    chunk_size=profile["chunk_size"],
+                    chunk_overlap=profile["chunk_overlap"],
+                )
+            )
+        except FileNotFoundError:
+            runtime_resources.update(
+                {
+                    "gnn_model": None,
+                    "device": None,
+                    "checkpoint_path": None,
+                }
+            )
+
+    if custom_backend != CUSTOM_BACKEND_EXACT:
+        runtime_resources["custom_ann_indexes"] = load_cached_ann_indexes(
+            split=profile["split"],
+            max_samples=profile["max_samples"],
+            chunk_size=profile["chunk_size"],
+            chunk_overlap=profile["chunk_overlap"],
+        )
+
+    return runtime_resources
 
 
 def build_query_example(base_example, question: str):
@@ -202,8 +274,44 @@ def run_dense_query(query_example, resources, top_k: int):
         top_k=top_k,
         query_prefix=QUERY_PREFIX,
     )
-    result["mode"] = "Dense"
+    result["mode"] = MODE_DENSE
     return result
+
+
+def rerank_result_by_indices(result, ranked_indices, mode_name: str):
+    reranked = dict(result)
+    reranked["retrieved_chunks"] = [result["retrieved_chunks"][i] for i in ranked_indices]
+
+    for key in ["scores", "dense_scores", "gnn_scores", "fusion_scores"]:
+        values = result.get(key)
+        if values:
+            reranked[key] = [values[i] for i in ranked_indices]
+
+    title_score_key = None
+    for key in ["scores", "gnn_scores", "fusion_scores", "dense_scores"]:
+        if reranked.get(key):
+            title_score_key = key
+            break
+
+    if title_score_key is not None:
+        title_best_score = {}
+        title_order = []
+        for chunk, score in zip(reranked["retrieved_chunks"], reranked[title_score_key]):
+            title = chunk.metadata["title"]
+            if title not in title_best_score:
+                title_best_score[title] = score
+                title_order.append(title)
+            else:
+                title_best_score[title] = max(title_best_score[title], score)
+
+        reranked["retrieved_titles"] = sorted(
+            title_order,
+            key=lambda title: title_best_score[title],
+            reverse=True,
+        )
+
+    reranked["mode"] = mode_name
+    return reranked
 
 
 def get_custom_candidate_pool_size(top_k: int) -> int:
@@ -331,7 +439,7 @@ def build_dense_result_from_candidates(question: str, candidate_example, top_k: 
         "retrieved_chunks": retrieved_chunks,
         "retrieved_titles": retrieved_titles,
         "scores": retrieved_scores,
-        "mode": "Dense",
+        "mode": MODE_DENSE,
         "selected_global_indices": retrieved_global_indices,
         "candidate_pool_size": len(chunks),
         "custom_backend": candidate_example.get("custom_backend", CUSTOM_BACKEND_EXACT),
@@ -376,10 +484,34 @@ def run_custom_query(
     )
     candidate_example = build_custom_candidate_example(question, candidate_pack, resources)
 
-    if retrieval_mode == "Dense":
+    if retrieval_mode == MODE_DENSE:
         return build_dense_result_from_candidates(question, candidate_example, top_k)
 
-    if retrieval_mode == "Fusion":
+    if retrieval_mode == MODE_PCST_DENSE:
+        result = pcst_dense_retrieve_for_example(
+            example=candidate_example,
+            embed_model=resources["embed_model"],
+            top_k=top_k,
+            seed_k=min(3, top_k),
+            query_prefix=QUERY_PREFIX,
+        )
+        result["mode"] = MODE_PCST_DENSE
+        return attach_global_indices(result, candidate_example, local_indices=result.get("selected_nodes"))
+
+    if retrieval_mode == MODE_GNN:
+        ensure_gnn_available(resources)
+        result = gnn_retrieve_for_example(
+            example=candidate_example,
+            embed_model=resources["embed_model"],
+            gnn_model=resources["gnn_model"],
+            device=resources["device"],
+            top_k=top_k,
+            query_prefix=QUERY_PREFIX,
+        )
+        result["mode"] = MODE_GNN
+        return attach_global_indices(result, candidate_example)
+
+    if retrieval_mode == MODE_FUSION:
         ensure_gnn_available(resources)
         result = dense_gnn_fusion_retrieve_for_example(
             example=candidate_example,
@@ -390,10 +522,10 @@ def run_custom_query(
             lambda_dense=lambda_dense,
             query_prefix=QUERY_PREFIX,
         )
-        result["mode"] = "Fusion"
+        result["mode"] = MODE_FUSION
         return attach_global_indices(result, candidate_example)
 
-    if retrieval_mode == "PCST":
+    if retrieval_mode == MODE_PCST_LEARNED:
         ensure_gnn_available(resources)
         result = pcst_retrieve_for_example(
             example=candidate_example,
@@ -401,30 +533,17 @@ def run_custom_query(
             gnn_model=resources["gnn_model"],
             device=resources["device"],
             top_k=top_k,
-            seed_k=min(3, top_k),
+            seed_k=min(PCST_LEARNED_SEED_K, top_k),
+            expansion_factor=PCST_LEARNED_EXPANSION_FACTOR,
+            fusion_anchor_pool_factor=PCST_LEARNED_FUSION_ANCHOR_POOL_FACTOR,
+            pcst_bonus=PCST_LEARNED_BONUS,
+            preserve_fusion_top_k=min(PCST_LEARNED_PRESERVE_FUSION_TOP_K, top_k),
+            title_diversity_bonus=PCST_LEARNED_TITLE_DIVERSITY_BONUS,
             lambda_dense=lambda_dense,
             query_prefix=QUERY_PREFIX,
         )
-        dense_scores, gnn_scores, fusion_scores = compute_fusion_scores(
-            example=candidate_example,
-            embed_model=resources["embed_model"],
-            gnn_model=resources["gnn_model"],
-            device=resources["device"],
-            lambda_dense=lambda_dense,
-            query_prefix=QUERY_PREFIX,
-        )
-        selected_nodes = multiseed_pcst_selection(
-            example=candidate_example,
-            fusion_scores=fusion_scores,
-            seed_k=min(3, top_k),
-            max_nodes=top_k,
-        )
-        result["mode"] = "PCST"
-        result["dense_scores"] = [float(dense_scores[i]) for i in selected_nodes]
-        result["gnn_scores"] = [float(gnn_scores[i]) for i in selected_nodes]
-        result["fusion_scores"] = [float(fusion_scores[i]) for i in selected_nodes]
-        result["selected_nodes"] = selected_nodes
-        return attach_global_indices(result, candidate_example, local_indices=selected_nodes)
+        result["mode"] = MODE_PCST_LEARNED
+        return attach_global_indices(result, candidate_example, local_indices=result.get("selected_nodes"))
 
     raise ValueError(f"Unsupported retrieval mode: {retrieval_mode}")
 
@@ -444,11 +563,33 @@ def run_custom_comparison_query(
     )
     candidate_example = build_custom_candidate_example(question, candidate_pack, resources)
 
+    dense_result = build_dense_result_from_candidates(question, candidate_example, top_k)
+    dense_result["mode"] = MODE_DENSE
+    pcst_dense_result = run_custom_query(
+        question=question,
+        retrieval_mode=MODE_PCST_DENSE,
+        resources=resources,
+        top_k=top_k,
+        lambda_dense=lambda_dense,
+        custom_backend=custom_backend,
+    )
     results = {
-        "Dense": build_dense_result_from_candidates(question, candidate_example, top_k)
+        MODE_DENSE: dense_result,
+        MODE_PCST_DENSE: pcst_dense_result,
     }
 
     if resources["gnn_model"] is not None:
+        gnn_result = gnn_retrieve_for_example(
+            example=candidate_example,
+            embed_model=resources["embed_model"],
+            gnn_model=resources["gnn_model"],
+            device=resources["device"],
+            top_k=top_k,
+            query_prefix=QUERY_PREFIX,
+        )
+        gnn_result["mode"] = MODE_GNN
+        results[MODE_GNN] = attach_global_indices(gnn_result, candidate_example)
+
         fusion_result = dense_gnn_fusion_retrieve_for_example(
             example=candidate_example,
             embed_model=resources["embed_model"],
@@ -458,8 +599,8 @@ def run_custom_comparison_query(
             lambda_dense=lambda_dense,
             query_prefix=QUERY_PREFIX,
         )
-        fusion_result["mode"] = "Fusion"
-        results["Fusion"] = attach_global_indices(fusion_result, candidate_example)
+        fusion_result["mode"] = MODE_FUSION
+        results[MODE_FUSION] = attach_global_indices(fusion_result, candidate_example)
 
         pcst_result = pcst_retrieve_for_example(
             example=candidate_example,
@@ -467,30 +608,21 @@ def run_custom_comparison_query(
             gnn_model=resources["gnn_model"],
             device=resources["device"],
             top_k=top_k,
-            seed_k=min(3, top_k),
+            seed_k=min(PCST_LEARNED_SEED_K, top_k),
+            expansion_factor=PCST_LEARNED_EXPANSION_FACTOR,
+            fusion_anchor_pool_factor=PCST_LEARNED_FUSION_ANCHOR_POOL_FACTOR,
+            pcst_bonus=PCST_LEARNED_BONUS,
+            preserve_fusion_top_k=min(PCST_LEARNED_PRESERVE_FUSION_TOP_K, top_k),
+            title_diversity_bonus=PCST_LEARNED_TITLE_DIVERSITY_BONUS,
             lambda_dense=lambda_dense,
             query_prefix=QUERY_PREFIX,
         )
-        dense_scores, gnn_scores, fusion_scores = compute_fusion_scores(
-            example=candidate_example,
-            embed_model=resources["embed_model"],
-            gnn_model=resources["gnn_model"],
-            device=resources["device"],
-            lambda_dense=lambda_dense,
-            query_prefix=QUERY_PREFIX,
+        pcst_result["mode"] = MODE_PCST_LEARNED
+        results[MODE_PCST_LEARNED] = attach_global_indices(
+            pcst_result,
+            candidate_example,
+            local_indices=pcst_result.get("selected_nodes"),
         )
-        selected_nodes = multiseed_pcst_selection(
-            example=candidate_example,
-            fusion_scores=fusion_scores,
-            seed_k=min(3, top_k),
-            max_nodes=top_k,
-        )
-        pcst_result["mode"] = "PCST"
-        pcst_result["dense_scores"] = [float(dense_scores[i]) for i in selected_nodes]
-        pcst_result["gnn_scores"] = [float(gnn_scores[i]) for i in selected_nodes]
-        pcst_result["fusion_scores"] = [float(fusion_scores[i]) for i in selected_nodes]
-        pcst_result["selected_nodes"] = selected_nodes
-        results["PCST"] = attach_global_indices(pcst_result, candidate_example, local_indices=selected_nodes)
 
     return results
 
@@ -506,7 +638,33 @@ def run_fusion_query(query_example, resources, top_k: int, lambda_dense: float):
         lambda_dense=lambda_dense,
         query_prefix=QUERY_PREFIX,
     )
-    result["mode"] = "Fusion"
+    result["mode"] = MODE_FUSION
+    return result
+
+
+def run_gnn_query(query_example, resources, top_k: int):
+    ensure_gnn_available(resources)
+    result = gnn_retrieve_for_example(
+        example=query_example,
+        embed_model=resources["embed_model"],
+        gnn_model=resources["gnn_model"],
+        device=resources["device"],
+        top_k=top_k,
+        query_prefix=QUERY_PREFIX,
+    )
+    result["mode"] = MODE_GNN
+    return result
+
+
+def run_pcst_dense_query(query_example, resources, top_k: int):
+    result = pcst_dense_retrieve_for_example(
+        example=query_example,
+        embed_model=resources["embed_model"],
+        top_k=top_k,
+        seed_k=min(3, top_k),
+        query_prefix=QUERY_PREFIX,
+    )
+    result["mode"] = MODE_PCST_DENSE
     return result
 
 
@@ -518,58 +676,50 @@ def run_pcst_query(query_example, resources, top_k: int, lambda_dense: float):
         gnn_model=resources["gnn_model"],
         device=resources["device"],
         top_k=top_k,
-        seed_k=min(3, top_k),
+        seed_k=min(PCST_LEARNED_SEED_K, top_k),
+        expansion_factor=PCST_LEARNED_EXPANSION_FACTOR,
+        fusion_anchor_pool_factor=PCST_LEARNED_FUSION_ANCHOR_POOL_FACTOR,
+        pcst_bonus=PCST_LEARNED_BONUS,
+        preserve_fusion_top_k=min(PCST_LEARNED_PRESERVE_FUSION_TOP_K, top_k),
+        title_diversity_bonus=PCST_LEARNED_TITLE_DIVERSITY_BONUS,
         lambda_dense=lambda_dense,
         query_prefix=QUERY_PREFIX,
     )
-    result["mode"] = "PCST"
-
-    dense_scores, gnn_scores, fusion_scores = compute_fusion_scores(
-        example=query_example,
-        embed_model=resources["embed_model"],
-        gnn_model=resources["gnn_model"],
-        device=resources["device"],
-        lambda_dense=lambda_dense,
-        query_prefix=QUERY_PREFIX,
-    )
-    selected_nodes = multiseed_pcst_selection(
-        example=query_example,
-        fusion_scores=fusion_scores,
-        seed_k=min(3, top_k),
-        max_nodes=top_k,
-    )
-
-    result["dense_scores"] = [float(dense_scores[i]) for i in selected_nodes]
-    result["gnn_scores"] = [float(gnn_scores[i]) for i in selected_nodes]
-    result["selected_nodes"] = selected_nodes
+    result["mode"] = MODE_PCST_LEARNED
     return result
 
 
 def ensure_gnn_available(resources):
     if resources["gnn_model"] is None:
         raise FileNotFoundError(
-            "Fusion and PCST require a trained GNN checkpoint in artifacts/. "
+            "GNN retrieval, Dense retrieval + Query-Aware GraphSAGE, and Dense retrieval + Query-Aware GraphSAGE + PCST (Main Method) require a trained GNN checkpoint in artifacts/. "
             "Run graphrag_env/src/gnn_train.py first."
         )
 
 
 def run_single_query(query_example, retrieval_mode: str, resources, top_k: int, lambda_dense: float):
-    if retrieval_mode == "Dense":
+    if retrieval_mode == MODE_DENSE:
         return run_dense_query(query_example, resources, top_k)
-    if retrieval_mode == "Fusion":
+    if retrieval_mode == MODE_PCST_DENSE:
+        return run_pcst_dense_query(query_example, resources, top_k)
+    if retrieval_mode == MODE_GNN:
+        return run_gnn_query(query_example, resources, top_k)
+    if retrieval_mode == MODE_FUSION:
         return run_fusion_query(query_example, resources, top_k, lambda_dense)
-    if retrieval_mode == "PCST":
+    if retrieval_mode == MODE_PCST_LEARNED:
         return run_pcst_query(query_example, resources, top_k, lambda_dense)
     raise ValueError(f"Unsupported retrieval mode: {retrieval_mode}")
 
 
 def run_comparison_query(query_example, resources, top_k: int, lambda_dense: float):
     results = {}
-    results["Dense"] = run_dense_query(query_example, resources, top_k)
+    results[MODE_DENSE] = run_dense_query(query_example, resources, top_k)
+    results[MODE_PCST_DENSE] = run_pcst_dense_query(query_example, resources, top_k)
 
     if resources["gnn_model"] is not None:
-        results["Fusion"] = run_fusion_query(query_example, resources, top_k, lambda_dense)
-        results["PCST"] = run_pcst_query(query_example, resources, top_k, lambda_dense)
+        results[MODE_GNN] = run_gnn_query(query_example, resources, top_k)
+        results[MODE_FUSION] = run_fusion_query(query_example, resources, top_k, lambda_dense)
+        results[MODE_PCST_LEARNED] = run_pcst_query(query_example, resources, top_k, lambda_dense)
 
     return results
 
@@ -947,7 +1097,7 @@ def main():
     selected_profile_label = st.sidebar.selectbox("Artifact profile", profile_labels)
     selected_profile = next(profile for profile in profiles if profile["label"] == selected_profile_label)
 
-    retrieval_mode = st.sidebar.selectbox("Retrieval mode", ["Dense", "Fusion", "PCST"])
+    retrieval_mode = st.sidebar.selectbox("Retrieval mode", RETRIEVAL_MODES)
     top_k = st.sidebar.slider("Top-k", min_value=1, max_value=10, value=5)
     lambda_dense = st.sidebar.slider("lambda_dense", min_value=0.0, max_value=1.0, value=0.5, step=0.05)
     llm_enabled = st.sidebar.checkbox("Enable GPT-4o-mini answer generation", value=False)
@@ -955,7 +1105,7 @@ def main():
     compare_all_modes = st.sidebar.checkbox("Compare all retrieval modes", value=False)
 
     try:
-        resources = load_demo_bundle(
+        base_resources = load_base_resources(
             split=selected_profile["split"],
             max_samples=selected_profile["max_samples"],
             chunk_size=selected_profile["chunk_size"],
@@ -965,10 +1115,34 @@ def main():
         st.error(str(exc))
         st.stop()
 
-    if retrieval_mode in {"Fusion", "PCST"} and resources["gnn_model"] is None:
-        st.sidebar.warning("Fusion and PCST need a trained GNN checkpoint for this artifact profile.")
+    custom_backend_options = get_custom_backend_options(base_resources)
+    default_custom_backend = st.session_state.get("custom_retrieval_backend", CUSTOM_BACKEND_EXACT)
+    if default_custom_backend not in custom_backend_options:
+        default_custom_backend = CUSTOM_BACKEND_EXACT
+
+    resources = get_runtime_resources(
+        profile=selected_profile,
+        retrieval_mode=retrieval_mode,
+        compare_all_modes=compare_all_modes,
+        custom_backend=default_custom_backend,
+    )
+
+    if retrieval_mode in GNN_REQUIRED_MODES and resources["gnn_model"] is None:
+        st.sidebar.warning(
+            "GNN retrieval, Dense retrieval + Query-Aware GraphSAGE, and Dense retrieval + Query-Aware GraphSAGE + PCST (Main Method) need a trained GNN checkpoint for this artifact profile."
+        )
     if compare_all_modes and resources["gnn_model"] is None:
-        st.sidebar.info("Comparison mode will show Dense only until a GNN checkpoint is available.")
+        st.sidebar.info("Comparison mode will show only the FAISS-only and heuristic PCST baselines until a GNN checkpoint is available.")
+
+    if resources["gnn_model"] is None:
+        st.sidebar.caption("GNN checkpoint loading is skipped unless a GNN-based mode or compare-all is selected.")
+    else:
+        st.sidebar.caption("GNN checkpoint loaded for the current profile.")
+
+    if default_custom_backend == CUSTOM_BACKEND_EXACT:
+        st.sidebar.caption("ANN indexes are built only when you choose HNSW or IVF in Custom Question Mode.")
+    else:
+        st.sidebar.caption(f"{default_custom_backend} ANN index is loaded for custom-question retrieval.")
 
     render_header(resources, selected_profile_label)
 
