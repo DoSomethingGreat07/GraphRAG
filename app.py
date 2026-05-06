@@ -22,7 +22,7 @@ from graphrag_env.src.artifact_runtime import load_artifact_bundle, load_gnn_fro
 from graphrag_env.src.gnn_fusion_retreival import dense_gnn_fusion_retrieve_for_example
 from graphrag_env.src.gnn_retrieval import gnn_retrieve_for_example
 from graphrag_env.src.hybrid_graph_builder import graph_stats
-from graphrag_env.src.llm_eval import generate_answer_openai
+from graphrag_env.src.llm_eval import generate_answer_openai, generate_retrieval_fallback_answer
 from graphrag_env.src.pcst_dense_retrieval import (
     pcst_dense_retrieve_for_example,
 )
@@ -249,9 +249,17 @@ def build_query_example(base_example, question: str):
     return query_example
 
 
-def generate_final_answer(question: str, retrieved_chunks, enabled: bool, top_k: int):
+def generate_final_answer(
+    question: str,
+    retrieved_chunks,
+    enabled: bool,
+    top_k: int,
+    question_type: str | None = None,
+):
     if not enabled:
-        return "Retrieval only mode"
+        if question_type == "bridge":
+            return "Insufficient evidence"
+        return generate_retrieval_fallback_answer(question, retrieved_chunks, top_k=top_k)
     return generate_answer_openai(question, retrieved_chunks, top_k=top_k)
 
 
@@ -864,13 +872,26 @@ def render_debug_panel(result, example=None, graph_summary=None):
             )
 
 
-def build_comparison_rows(question, comparison_results, llm_enabled, top_k, gold_titles=None):
+def build_comparison_rows(
+    question,
+    comparison_results,
+    llm_enabled,
+    top_k,
+    gold_titles=None,
+    question_type: str | None = None,
+):
     rows = []
     best_mode = None
     best_match_count = -1
 
     for mode_name, result in comparison_results.items():
-        final_answer = generate_final_answer(question, result["retrieved_chunks"], llm_enabled, top_k)
+        final_answer = generate_final_answer(
+            question,
+            result["retrieved_chunks"],
+            llm_enabled,
+            top_k,
+            question_type=question_type,
+        )
         row = {
             "mode": mode_name,
             "retrieved_titles": ", ".join(result.get("retrieved_titles", [])),
@@ -972,6 +993,7 @@ def render_dataset_mode(resources, retrieval_mode, top_k, lambda_dense, llm_enab
                     llm_enabled=llm_enabled,
                     top_k=top_k,
                     gold_titles=example["supporting_facts"]["title"],
+                    question_type=example.get("type"),
                 )
                 st.markdown("**Comparison across retrieval modes**")
                 st.dataframe(rows, use_container_width=True)
@@ -984,7 +1006,13 @@ def render_dataset_mode(resources, retrieval_mode, top_k, lambda_dense, llm_enab
         st.error(str(exc))
         return
 
-    final_answer = generate_final_answer(example["question"], result["retrieved_chunks"], llm_enabled, top_k)
+    final_answer = generate_final_answer(
+        example["question"],
+        result["retrieved_chunks"],
+        llm_enabled,
+        top_k,
+        question_type=example.get("type"),
+    )
     st.markdown("**Final answer**")
     render_answer_banner(final_answer, retrieval_only=not llm_enabled)
 

@@ -17,6 +17,9 @@ This repository implements a GraphRAG-style multi-hop question answering system 
 - Custom-question retrieval with exact search and optional ANN backends (`HNSW`, `IVF`) when `hnswlib` or `faiss` is available.
 - LLM-based answer evaluation using `gpt-4o-mini`.
 - Retrieval and LLM evaluation scripts, including comparison and plotting utilities.
+- Retrieval-only inference benchmarking for dense, GNN, fusion, and PCST modes.
+- NeurIPS-style project report under `paper/`, including retrieval results, LLM evaluation, qualitative analysis, graph statistics, and latency measurements.
+- Docker-based FastAPI + React deployment path with configurable CORS and frontend API base URL.
 
 ## Architecture
 
@@ -87,14 +90,20 @@ User question / dataset example
 ├── prepare_artifacts.py                # Offline artifact build script
 ├── requirements.txt                    # Minimal runtime dependencies for the app/API
 ├── .env.example                        # Example environment variables
+├── Dockerfile.api                      # FastAPI backend container
+├── docker-compose.yml                  # Local API + React deployment
+├── DEPLOYMENT.md                       # Deployment guide
 ├── backend/
 │   ├── api.py                          # FastAPI routes
 │   └── service.py                      # Retrieval + answer generation service layer
 ├── frontend/
+│   ├── Dockerfile                      # React/Nginx container
+│   ├── nginx.conf                      # Static frontend + API proxy
 │   ├── package.json                    # React/Vite scripts and dependencies
 │   └── src/
 │       ├── App.tsx                     # Main React UI
 │       ├── main.tsx                    # React entrypoint
+│       ├── vite-env.d.ts               # Vite environment typing
 │       └── styles.css                  # Tailwind-backed styles
 ├── graphrag_env/
 │   ├── requirements.txt                # Broader research/evaluation dependencies
@@ -111,10 +120,12 @@ User question / dataset example
 │       ├── pcst_dense_retrieval.py     # Dense-guided heuristic PCST retrieval
 │       ├── retrieval_eval.py           # Dense retrieval evaluation
 │       ├── compare_retrieval_modes.py  # Same-split comparison across all five modes
+│       ├── benchmark_inference_time.py # Retrieval-only latency benchmark
 │       ├── llm_eval.py                 # Answer-generation evaluation
 │       ├── plot_llm_eval_results.py    # LLM eval plotting utility
 │       ├── artifact_runtime.py         # Artifact and checkpoint loading
 │       └── artifact_utils.py           # Artifact pathing and save/load helpers
+├── paper/                              # NeurIPS-style report and build outputs
 ├── artifacts/                          # Local artifact cache and checkpoints (not for Git)
 └── assets/diagrams/
     └── overall-system-architecture-fusion-pcst.png
@@ -206,7 +217,10 @@ cp .env.example .env
 Set the required values:
 ```env
 OPENAI_API_KEY=your_key_here
+GRAPH_RAG_CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 ```
+
+`OPENAI_API_KEY` is optional unless LLM answer generation is enabled.
 
 ### 5. Prepare artifacts
 If you do not already have the `artifacts/` directory, build it locally:
@@ -238,10 +252,35 @@ npm install
 npm run dev
 ```
 
+## Deployment
+
+The FastAPI + React deployment path is documented in `DEPLOYMENT.md`. The deployment expects prebuilt artifacts in `artifacts/`; artifact preparation and GNN training are offline steps.
+
+For local Docker deployment:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Then open:
+- Frontend: `http://localhost:3000`
+- API docs: `http://localhost:8000/docs`
+- API health: `http://localhost:8000/api/health`
+
 ## Environment Variables
 - `OPENAI_API_KEY`
   - Used by `llm_eval.py`, `backend/service.py`, and the Streamlit app when answer generation is enabled.
   - Required only for OpenAI-backed answer generation and LLM evaluation.
+- `GRAPH_RAG_CORS_ORIGINS`
+  - Comma-separated list of allowed frontend origins for the FastAPI backend.
+  - Example: `https://your-frontend.example.com,http://localhost:3000`.
+- `VITE_API_BASE_URL`
+  - React build-time API base URL.
+  - Use `/api` when serving the React app through the included Nginx proxy.
+  - Use a full URL such as `https://your-api.example.com/api` when hosting the frontend separately.
+- `PORT`
+  - API container port; defaults to `8000` in `Dockerfile.api`.
 
 ## Running the Project
 
@@ -265,6 +304,12 @@ npm run dev
 cd frontend
 npm run build
 npm run preview
+```
+
+For a deployed frontend that talks to a separately hosted API:
+```bash
+cd frontend
+VITE_API_BASE_URL=https://your-api.example.com/api npm run build
 ```
 
 ### Retrieval evaluation
@@ -306,6 +351,43 @@ python3 -m graphrag_env.src.llm_eval --retrieval-mode pcst --max-samples 300 --t
 ```bash
 python3 -m graphrag_env.src.plot_llm_eval_results --files llm_eval_results_dense.json llm_eval_results_pcst_dense.json llm_eval_results_gnn.json llm_eval_results_fusion.json llm_eval_results_pcst.json --output assets/diagrams/llm_eval_mode_comparison.png --summary-csv assets/diagrams/llm_eval_mode_summary.csv
 ```
+
+### Retrieval inference benchmark
+Measures retrieval-only latency, excluding artifact loading, graph construction, model loading, and LLM generation.
+
+```bash
+graphrag_env/bin/python graphrag_env/src/benchmark_inference_time.py \
+  --num-queries 500 \
+  --warmup 30 \
+  --output-json paper/inference_time_results.json \
+  --output-csv paper/inference_time_results.csv
+```
+
+Latest measured retrieval-only timing summary:
+
+| Mode | n | Mean ms | P50 ms | P95 ms |
+| --- | ---: | ---: | ---: | ---: |
+| Dense | 500 | 19.85 | 17.01 | 38.44 |
+| Dense-guided PCST | 500 | 16.81 | 16.15 | 25.45 |
+| GNN | 500 | 16.97 | 16.15 | 25.31 |
+| Dense + GraphSAGE fusion | 500 | 33.84 | 31.84 | 52.59 |
+| Dense + GraphSAGE + PCST | 500 | 32.96 | 30.96 | 51.10 |
+
+### Research report
+The NeurIPS-style project report lives in `paper/`.
+
+```bash
+cd paper
+pdflatex main.tex
+bibtex main
+pdflatex main.tex
+pdflatex main.tex
+```
+
+Generated report:
+- `paper/main.pdf`
+- `paper/main.tex`
+- `paper/references.bib`
 
 ## API Endpoints
 Based on `backend/api.py`:
@@ -402,33 +484,13 @@ Architecture diagram:
 
 <!-- Add screenshots or demo GIFs here -->
 
-## Deployment
-Based on the current codebase, the project appears designed for local or self-managed deployment rather than a specific managed platform.
-
-What exists:
-- Streamlit app entrypoint: `app.py`
-- FastAPI backend: `backend/api.py`
-- React frontend build scripts in `frontend/package.json`
-
-What does not exist:
-- No `Dockerfile`
-- No `docker-compose.yml`
-- No Vercel, Netlify, or cloud deployment config
-- No CI/CD workflow for builds or deployment
-
-For a reproducible deployment, you will need:
-- a Python environment with the required dependencies
-- the prepared `artifacts/` directory
-- an OpenAI API key if answer generation is enabled
-- a trained GraphSAGE checkpoint if graph-based modes are required
-
 ## Limitations / Future Improvements
 - The repository depends on local artifact files; without them, startup requires rebuilding from the HotpotQA dataset.
 - Graph-based modes depend on a checkpoint matching the selected artifact profile.
-- The React frontend hardcodes the API base to `http://127.0.0.1:8000/api`.
+- The React frontend API base is configurable with `VITE_API_BASE_URL`; remember to set it for separate frontend/backend hosting.
 - ANN acceleration is optional and depends on extra libraries not installed by the main `requirements.txt`.
 - There is no automated test suite in the current repository.
-- There is no containerized deployment configuration.
+- Docker deployment is provided for the FastAPI + React path, but production hosting still needs platform-specific secrets, artifact storage, and persistent model cache configuration.
 - Some evaluation outputs and legacy scripts remain in `graphrag_env/src/`, so a public-facing cleanup pass may still be useful before publishing.
 
 ## Contributing

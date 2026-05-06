@@ -77,6 +77,94 @@ def normalize_answer(s: str) -> str:
     return white_space_fix(remove_articles(remove_punc(lower(s))))
 
 
+def _clean_candidate_text(text: str) -> str:
+    return " ".join((text or "").strip().split(" "))
+
+
+def _extract_capitalized_candidates(text: str) -> list[str]:
+    matches = re.findall(
+        r"\b(?:[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?(?:\s+[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?)*)\b",
+        text or "",
+    )
+    blocked = {
+        "The",
+        "A",
+        "An",
+        "He",
+        "She",
+        "They",
+        "It",
+        "This",
+        "That",
+        "These",
+        "Those",
+    }
+    return [item for item in matches if item not in blocked and len(item.split()) <= 5]
+
+
+def _select_best_candidate(question: str, candidates: list[str]) -> str:
+    question_norm = normalize_answer(question)
+    scored_candidates: collections.Counter[str] = collections.Counter()
+
+    for candidate in candidates:
+        cleaned = _clean_candidate_text(candidate)
+        if not cleaned:
+            continue
+        candidate_norm = normalize_answer(cleaned)
+        if not candidate_norm or candidate_norm in question_norm:
+            continue
+        scored_candidates[cleaned] += 1
+
+    if not scored_candidates:
+        return "Insufficient evidence"
+
+    best_candidate, best_count = scored_candidates.most_common(1)[0]
+    return best_candidate if best_count >= 2 else "Insufficient evidence"
+
+
+def generate_retrieval_fallback_answer(question: str, retrieved_chunks, top_k: int = 5) -> str:
+    selected_chunks = list(retrieved_chunks[:top_k]) if retrieved_chunks else []
+    if not selected_chunks:
+        return "Insufficient evidence"
+
+    question_lower = (question or "").strip().lower()
+    chunk_texts = [chunk.page_content.strip() for chunk in selected_chunks if chunk.page_content.strip()]
+    titles = [chunk.metadata.get("title", "").strip() for chunk in selected_chunks if chunk.metadata.get("title")]
+    combined_text = "\n".join(chunk_texts)
+
+    if question_lower.startswith(("when ", "what year", "which year", "in what year")):
+        date_match = re.search(
+            r"\b(?:\d{1,2}\s+)?(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b",
+            combined_text,
+        )
+        if date_match:
+            return date_match.group(0)
+        year_match = re.search(r"\b(?:1[5-9]\d{2}|20\d{2})\b", combined_text)
+        if year_match:
+            return year_match.group(0)
+        return "Insufficient evidence"
+
+    if question_lower.startswith(("how many", "how much")):
+        number_match = re.search(r"\b\d+(?:\.\d+)?\b", combined_text)
+        return number_match.group(0) if number_match else "Insufficient evidence"
+
+    if question_lower.startswith(("who ", "whom ", "whose ")):
+        return _select_best_candidate(question, titles + _extract_capitalized_candidates(combined_text))
+
+    if question_lower.startswith(("where ", "which city", "which country", "in which country")):
+        location_matches = re.findall(
+            r"\b(?:in|at|from)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b",
+            combined_text,
+        )
+        return _select_best_candidate(question, location_matches + titles)
+
+    if question_lower.startswith(("what album", "which album", "what film", "which film", "what song", "which song", "what book", "which book")):
+        return _select_best_candidate(question, titles)
+
+    generic_candidates = titles + _extract_capitalized_candidates(combined_text)
+    return _select_best_candidate(question, generic_candidates)
+
+
 def exact_match(prediction: str, ground_truth: str) -> float:
     return float(normalize_answer(prediction) == normalize_answer(ground_truth))
 
@@ -153,12 +241,11 @@ def build_context_from_chunks(
     retrieval_mode: str | None = None,
 ) -> str:
     context_parts = []
-    effective_top_k = top_k
     max_chars_per_chunk = 650 if retrieval_mode == "pcst" else 900
 
     for chunk in select_context_chunks(
         retrieved_chunks=retrieved_chunks,
-        top_k=effective_top_k,
+        top_k=top_k,
         retrieval_mode=retrieval_mode,
     ):
         title = chunk.metadata.get("title", "Unknown Title")

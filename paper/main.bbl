@@ -1,0 +1,53 @@
+\begin{thebibliography}{6}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Goemans and Williamson(1995)]{goemans1995pcst}
+Michel~X. Goemans and David~P. Williamson.
+\newblock A general approximation technique for constrained forest problems.
+\newblock \emph{SIAM Journal on Computing}, 24\penalty0 (2):\penalty0 296--317,
+  1995.
+
+\bibitem[Hamilton et~al.(2017)Hamilton, Ying, and
+  Leskovec]{hamilton2017graphsage}
+William~L. Hamilton, Rex Ying, and Jure Leskovec.
+\newblock Inductive representation learning on large graphs.
+\newblock In \emph{Advances in Neural Information Processing Systems},
+  volume~30, 2017.
+
+\bibitem[Karpukhin et~al.(2020)Karpukhin, Oguz, Min, Lewis, Wu, Edunov, Chen,
+  and Yih]{karpukhin2020dpr}
+Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey
+  Edunov, Danqi Chen, and Wen-tau Yih.
+\newblock Dense passage retrieval for open-domain question answering.
+\newblock In \emph{Proceedings of the 2020 Conference on Empirical Methods in
+  Natural Language Processing}, pages 6769--6781, 2020.
+
+\bibitem[Lewis et~al.(2020)Lewis, Perez, Piktus, Petroni, Karpukhin, Goyal,
+  Kuttler, Lewis, Yih, Rockt{\"a}schel, Riedel, and Kiela]{lewis2020rag}
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir
+  Karpukhin, Naman Goyal, Heinrich Kuttler, Mike Lewis, Wen-tau Yih, Tim
+  Rockt{\"a}schel, Sebastian Riedel, and Douwe Kiela.
+\newblock Retrieval-augmented generation for knowledge-intensive nlp tasks.
+\newblock \emph{Advances in Neural Information Processing Systems},
+  33:\penalty0 9459--9474, 2020.
+
+\bibitem[Robertson and Zaragoza(2009)]{robertson2009probabilistic}
+Stephen Robertson and Hugo Zaragoza.
+\newblock The probabilistic relevance framework: Bm25 and beyond.
+\newblock \emph{Foundations and Trends in Information Retrieval}, 3\penalty0
+  (4):\penalty0 333--389, 2009.
+
+\bibitem[Yang et~al.(2018)Yang, Qi, Zhang, Bengio, Cohen, Salakhutdinov, and
+  Manning]{yang2018hotpotqa}
+Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William~W. Cohen, Ruslan
+  Salakhutdinov, and Christopher~D. Manning.
+\newblock Hotpotqa: A dataset for diverse, explainable multi-hop question
+  answering.
+\newblock In \emph{Proceedings of the 2018 Conference on Empirical Methods in
+  Natural Language Processing}, pages 2369--2380, 2018.
+
+\end{thebibliography}

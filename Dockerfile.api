@@ -1,0 +1,31 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface \
+    PORT=8000
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+COPY backend ./backend
+COPY graphrag_env/src ./graphrag_env/src
+COPY graphrag_env/__init__.py ./graphrag_env/__init__.py
+COPY prepare_artifacts.py ./prepare_artifacts.py
+
+RUN mkdir -p /app/artifacts /app/.cache/huggingface
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://127.0.0.1:${PORT}/api/health || exit 1
+
+CMD ["sh", "-c", "uvicorn backend.api:app --host 0.0.0.0 --port ${PORT}"]

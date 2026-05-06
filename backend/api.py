@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -14,10 +16,18 @@ from backend.service import (
 
 app = FastAPI(title="GraphRAG API", version="0.1.0")
 
+allowed_origins_env = os.getenv("GRAPH_RAG_CORS_ORIGINS", "*")
+allowed_origins = [
+    origin.strip()
+    for origin in allowed_origins_env.split(",")
+    if origin.strip()
+]
+allow_credentials = "*" not in allowed_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins or ["*"],
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

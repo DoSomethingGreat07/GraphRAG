@@ -27,6 +27,7 @@ from graphrag_env.src.artifact_utils import get_artifact_paths
 from graphrag_env.src.gnn_fusion_retreival import dense_gnn_fusion_retrieve_for_example
 from graphrag_env.src.gnn_retrieval import gnn_retrieve_for_example
 from graphrag_env.src.hybrid_graph_builder import graph_stats
+from graphrag_env.src.llm_eval import generate_retrieval_fallback_answer
 from graphrag_env.src.pcst_dense_retrieval import (
     pcst_dense_retrieve_for_example,
 )
@@ -329,9 +330,17 @@ Context:
         return raw or "Insufficient evidence"
 
 
-def generate_final_answer(question: str, retrieved_chunks, enabled: bool, top_k: int):
+def generate_final_answer(
+    question: str,
+    retrieved_chunks,
+    enabled: bool,
+    top_k: int,
+    question_type: str | None = None,
+):
     if not enabled:
-        return "Retrieval only mode"
+        if question_type == "bridge":
+            return "Insufficient evidence"
+        return generate_retrieval_fallback_answer(question, retrieved_chunks, top_k=top_k)
     return generate_answer_openai(question, retrieved_chunks, top_k=top_k)
 
 
@@ -805,13 +814,26 @@ def run_custom_comparison_query(
     return results
 
 
-def build_comparison_rows(question, comparison_results, llm_enabled, top_k, gold_titles=None):
+def build_comparison_rows(
+    question,
+    comparison_results,
+    llm_enabled,
+    top_k,
+    gold_titles=None,
+    question_type: str | None = None,
+):
     rows = []
     best_mode = None
     best_match_count = -1
 
     for mode_name, result in comparison_results.items():
-        final_answer = generate_final_answer(question, result["retrieved_chunks"], llm_enabled, top_k)
+        final_answer = generate_final_answer(
+            question,
+            result["retrieved_chunks"],
+            llm_enabled,
+            top_k,
+            question_type=question_type,
+        )
         row = {
             "mode": mode_name,
             "retrieved_titles": result.get("retrieved_titles", []),
@@ -918,6 +940,7 @@ def execute_dataset_query(
             llm_enabled=llm_enabled,
             top_k=top_k,
             gold_titles=gold_titles,
+            question_type=example.get("type"),
         )
         active_result = comparison_results.get(retrieval_mode) or next(iter(comparison_results.values()))
     else:

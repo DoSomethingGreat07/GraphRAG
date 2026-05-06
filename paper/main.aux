@@ -1,0 +1,56 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{yang2018hotpotqa}
+\citation{lewis2020rag}
+\citation{karpukhin2020dpr}
+\citation{hamilton2017graphsage}
+\citation{lewis2020rag}
+\citation{robertson2009probabilistic}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\citation{karpukhin2020dpr}
+\citation{hamilton2017graphsage}
+\citation{goemans1995pcst}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Related work}{2}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Methodology}{2}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Dataset and preprocessing}{2}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Chunking and embedding}{2}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Dense retrieval}{2}{subsection.3.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Implemented GraphRAG architecture. The system loads HotpotQA examples, chunks and embeds local context, builds hybrid graphs, and evaluates dense, GNN, fusion, and PCST-style retrieval before answer generation.}}{3}{figure.1}\protected@file@percent }
+\newlabel{fig:architecture}{{1}{3}{Implemented GraphRAG architecture. The system loads HotpotQA examples, chunks and embeds local context, builds hybrid graphs, and evaluates dense, GNN, fusion, and PCST-style retrieval before answer generation}{figure.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Sparse/BM25 retrieval}{3}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Graph construction}{3}{subsection.3.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}GNN-based retrieval}{3}{subsection.3.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Fusion and PCST retrieval}{4}{subsection.3.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Experimental setup}{4}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Data and retrieval settings}{4}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Answer generation and metrics}{4}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Inference timing protocol}{4}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Results}{4}{section.5}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Retrieval evaluation with support recall@5 (SR@5) and partial support recall@5 (P-SR@5). Dense is reported on 10,000 examples; graph-aware modes are reported on the 2,000-question held-out split.}}{5}{table.1}\protected@file@percent }
+\newlabel{tab:retrieval-results}{{1}{5}{Retrieval evaluation with support recall@5 (SR@5) and partial support recall@5 (P-SR@5). Dense is reported on 10,000 examples; graph-aware modes are reported on the 2,000-question held-out split}{table.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces LLM answer evaluation on 300 HotpotQA examples. EM and F1 are computed after answer normalization.}}{5}{table.2}\protected@file@percent }
+\newlabel{tab:llm-results}{{2}{5}{LLM answer evaluation on 300 HotpotQA examples. EM and F1 are computed after answer normalization}{table.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Bridge versus comparison behavior}{5}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Discussion}{5}{section.6}\protected@file@percent }
+\bibstyle{plainnat}
+\bibdata{references}
+\bibcite{goemans1995pcst}{{1}{1995}{{Goemans and Williamson}}{{}}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Retrieval-only inference time per query in milliseconds over 500 measured examples. Timing excludes model/artifact loading and LLM answer generation.}}{6}{table.3}\protected@file@percent }
+\newlabel{tab:latency}{{3}{6}{Retrieval-only inference time per query in milliseconds over 500 measured examples. Timing excludes model/artifact loading and LLM answer generation}{table.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Saved result visualization comparing answer EM and F1 across retrieval modes.}}{6}{figure.2}\protected@file@percent }
+\newlabel{fig:wide-results}{{2}{6}{Saved result visualization comparing answer EM and F1 across retrieval modes}{figure.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Limitations}{6}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{6}{section.8}\protected@file@percent }
+\bibcite{hamilton2017graphsage}{{2}{2017}{{Hamilton et~al.}}{{Hamilton, Ying, and Leskovec}}}
+\bibcite{karpukhin2020dpr}{{3}{2020}{{Karpukhin et~al.}}{{Karpukhin, Oguz, Min, Lewis, Wu, Edunov, Chen, and Yih}}}
+\bibcite{lewis2020rag}{{4}{2020}{{Lewis et~al.}}{{Lewis, Perez, Piktus, Petroni, Karpukhin, Goyal, Kuttler, Lewis, Yih, Rockt{\"a}schel, Riedel, and Kiela}}}
+\bibcite{robertson2009probabilistic}{{5}{2009}{{Robertson and Zaragoza}}{{}}}
+\bibcite{yang2018hotpotqa}{{6}{2018}{{Yang et~al.}}{{Yang, Qi, Zhang, Bengio, Cohen, Salakhutdinov, and Manning}}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Tabular visualization of the LLM evaluation results included with the project assets.}}{7}{figure.3}\protected@file@percent }
+\newlabel{fig:result-tables}{{3}{7}{Tabular visualization of the LLM evaluation results included with the project assets}{figure.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Qualitative cases from the saved LLM evaluation JSONs. These examples illustrate why fusion improves bridge answers but graph expansion can still hurt downstream generation.}}{8}{table.4}\protected@file@percent }
+\newlabel{tab:qualitative}{{4}{8}{Qualitative cases from the saved LLM evaluation JSONs. These examples illustrate why fusion improves bridge answers but graph expansion can still hurt downstream generation}{table.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}NeurIPS checklist}{8}{appendix.A}\protected@file@percent }
+\gdef \@abspage@last{8}
